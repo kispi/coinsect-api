@@ -16,10 +16,17 @@ import { TypeUserRole, User } from '../entities/user'
 const connections = store.getters.connections()
 
 // 너무 짧은 시간에 수많은 소켓에 브로드캐스트하면 부하가 심해서, 특정 계정에 국한되지 않은 업데이트는 디바운스를 줌
-const debouncedBroadcast = type => coreHelpers.debounce(() => {
+//
+// 디바운스된 함수는 모듈 스코프에서 한 번만 만들어야 한다. 예전에는 `type => debounce(...)`로
+// 접속마다 새 디바운서를 만들어 호출했는데, debounce의 타이머는 클로저마다 따로라서
+// 서로 합쳐지지 않았다. 입장 하나당 500ms 뒤에 전체 브로드캐스트가 한 번씩 그대로 나갔고,
+// 동접이 몰릴 때 접속 이벤트 수 × 커넥션 수만큼 직렬화가 돌았다.
+const broadcastStats = type => () => {
   store.actions.loadStats()
   helpers.broadcast({ type })
-}, 500)
+}
+const debouncedBroadcastEnter = coreHelpers.debounce(broadcastStats('enter'), 500)
+const debouncedBroadcastLeave = coreHelpers.debounce(broadcastStats('leave'), 500)
 
 // @fastify/websocket v9+ 부터 핸들러가 SocketStream이 아닌 WebSocket 자체를 넘겨준다.
 export const onConnected = (connection: WebSocket, req: FastifyRequest) => {
@@ -30,14 +37,14 @@ export const onConnected = (connection: WebSocket, req: FastifyRequest) => {
   store.actions.setUserSetting(token)
 
   // 유저 접속시 통계 업데이트
-  debouncedBroadcast('enter')()
+  debouncedBroadcastEnter()
 
   connection.on('close', () => {
     const idx = connections.findIndex(conn => conn.connection === connection)
     if (idx >= 0) connections.splice(idx, 1)
 
     // 유저 접속 끊길시 통계 업데이트
-    debouncedBroadcast('leave')()
+    debouncedBroadcastLeave()
   })
 
   connection.on('error', error => {
