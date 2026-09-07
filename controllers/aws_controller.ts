@@ -29,7 +29,7 @@ const awsController = {
   
                 ${url}
               `,
-              channel: 'image_moderation',
+              channel: 'image-moderation',
             })
           }
           c.res.success(result)
