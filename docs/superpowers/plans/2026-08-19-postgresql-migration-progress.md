@@ -45,7 +45,7 @@
 접속정보를 채운다(값은 `ormconfig.postgre.md`에 있고 그 파일도 gitignore다).
 컷오버 Step 4에서 `EC2_ORMCONFIG` 시크릿을 이 내용으로 교체한다.
 
-**클라이언트 3개는 끝났다.** `coinsect_nuxt`, `coinsect_web`, `coinsect_admin` 모두
+**클라이언트 3개는 끝났다.** `coinsect-nuxt`, `coinsect-web`, `coinsect-admin` 모두
 `feature/query-protocol` 브랜치에 커밋돼 있다(푸시 안 함). 컷오버 때 머지해서 API와
 **같은 창에서 함께 배포한다.** API를 먼저 올리면 커뮤니티 목록·고래알림 필터·어드민
 테이블 검색이 즉시 깨진다.

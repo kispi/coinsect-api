@@ -1,7 +1,7 @@
 # 목록 조회 쿼리 프로토콜
 
 `orm.querySetter`를 쓰는 모든 목록 엔드포인트가 받는 공통 쿼리 파라미터다.
-`coinsect_nuxt`와 `coinsect_admin`이 이 계약에 맞춰 요청을 만든다. 세 저장소의 단일
+`coinsect-nuxt`와 `coinsect-admin`이 이 계약에 맞춰 요청을 만든다. 세 저장소의 단일
 출처이므로, 문법을 바꾸려면 이 문서를 먼저 고친다.
 
 2026-08-19 이전에는 `where`가 임의 SQL 조각이었고 서버가 그대로 WHERE 절에 이어

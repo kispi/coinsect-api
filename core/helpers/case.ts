@@ -1,4 +1,4 @@
-// coinsect_api가 내보내는 응답의 키는 camelCase로 통일한다. 문제는 우리가 그대로 중계하는 외부
+// coinsect-api가 내보내는 응답의 키는 camelCase로 통일한다. 문제는 우리가 그대로 중계하는 외부
 // 원천들이다 - 업비트 뉴스는 featured_list/created_at/is_best를, coinmarketcap은 status.error_code를
 // snake_case로 준다. 그게 그대로 새어나가면 같은 응답 안에서 realTimePositions·whaleAlerts 같은
 // 우리 키와 표기가 섞인다. keysToCamel을 중계 경계에 한 번 걸어서 원천의 표기를 여기서 끊는다.

@@ -2,7 +2,7 @@
 // JSON 파일이 아니라 TS 모듈인 이유: 이 레포의 빌드는 tsc뿐이라(package.json의 build)
 // .json은 dist/로 복사되지 않는다. constants/symbols.ts와 같은 방식이다.
 // 인용(quote) 단위에는 take가 없고 인물 단위에만 있다. 원본 Go의 QuoteRow.Quotes 익명 struct에
-// text/source/date만 있어 quote.take가 직렬화에서 빠졌기 때문이며, coinsect_web의 회귀 테스트가
+// text/source/date만 있어 quote.take가 직렬화에서 빠졌기 때문이며, coinsect-web의 회귀 테스트가
 // 이 형태를 가드하고 있다.
 
 export type BitcoinQuote = {

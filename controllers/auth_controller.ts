@@ -97,7 +97,7 @@ const authController = {
           email: ${identity.email}
           kakaoId: ${identity.kakaoId}
         `,
-        channel: 'coinsect_api',
+        channel: 'coinsect-api',
       }))
       c.res.failed(e)
     }

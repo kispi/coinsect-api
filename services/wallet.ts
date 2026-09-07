@@ -149,7 +149,7 @@ const walletService = {
           ${result.map(row => `<${row.url}|${row.symbol}: ${row.before} =&gt; ${row.after}>`).join('\n')}\n
           총 잔고: ${total.usd.toFixed(2)} USD = ${total.krw.toFixed(0)} KRW = ${total.btc.toFixed(8)} BTC
         `,
-        channel: 'coinsect_api',
+        channel: 'coinsect-api',
       })
     } finally {
       log.info('walletService.renewAll: updating wallets finished.')

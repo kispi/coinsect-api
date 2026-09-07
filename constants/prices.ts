@@ -3,7 +3,7 @@
 // .json은 dist/로 복사되지 않는다. constants/symbols.ts와 같은 방식이다.
 // ticker/description/source/img가 null을 허용하는 것은 원본 Go(*string, omitempty 없음)의
 // 응답 형태를 유지하기 위해서다. prices.json의 Big Mac Index 항목에는 ticker가 없어 null로 나갔고,
-// coinsect_web의 회귀 테스트(tests/types/api.spec.ts)가 이 형태를 가드하고 있다.
+// coinsect-web의 회귀 테스트(tests/types/api.spec.ts)가 이 형태를 가드하고 있다.
 
 export type PricePoint = {
   d: string

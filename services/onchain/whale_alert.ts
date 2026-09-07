@@ -12,7 +12,7 @@ const apiKey = store.state.serverConfig.WHALE_ALERT
 // https://docs.whale-alert.io/
 // Rate Limit for Free Plan: 10 per minute.
 
-// coinsect_nuxt의 excludeBetweenSameExchange 필터. 한쪽만 알려진 주체인 거래를 남긴다.
+// coinsect-nuxt의 excludeBetweenSameExchange 필터. 한쪽만 알려진 주체인 거래를 남긴다.
 // 구 프론트는 MySQL 전용 XOR을 직접 보냈는데, PostgreSQL에는 XOR이 없고 화이트리스트
 // DSL로 표현할 수도 없어서 서버가 이름으로 받는다.
 export const applyExcludeBetweenSameExchange = (qb: SelectQueryBuilder<any>) => {

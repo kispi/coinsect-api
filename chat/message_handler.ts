@@ -80,7 +80,7 @@ const messageHandlers = ({ message, ip, token }:  { message: IMessage, ip: strin
 
             ${user.profile.nickname} / ${ip} / ${token}
           `,
-          channel: 'coinsect_api',
+          channel: 'coinsect-api',
         })
       }
       if (e.message) helpers.alertUser({ text: e.message, token })

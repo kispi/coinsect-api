@@ -52,7 +52,7 @@ export const resolveProperty = (meta: EntityMetadata, field: string): string => 
 
 /**
  * '별칭.컬럼' 또는 '컬럼'을 해석한다. 별칭이 붙으면 같은 요청의 ?join=이 만든 것이어야
- * 한다 - coinsect_admin이 profile.nickname, blockchain.name 같은 조인 컬럼으로 정렬하고
+ * 한다 - coinsect-admin이 profile.nickname, blockchain.name 같은 조인 컬럼으로 정렬하고
  * 검색하기 때문이다.
  */
 export const resolveField = (

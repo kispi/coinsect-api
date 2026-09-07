@@ -4,7 +4,7 @@ import helpers from '../core/helpers'
 import { log } from '../core/logger'
 
 const endpoint = {
-  'coinsect_api': store.state.serverConfig.SLACK_COINSECT_API,
+  'coinsect-api': store.state.serverConfig.SLACK_COINSECT_API,
   'image_moderation': store.state.serverConfig.SLACK_IMAGE_MODERATION,
 }
 
@@ -13,7 +13,7 @@ const postMessage = async ({
   channel,
 }: {
   text: string,
-  channel: 'coinsect_api' | 'image_moderation',
+  channel: 'coinsect-api' | 'image_moderation',
 }) => {
   if (!endpoint[channel]) {
     log.error('slack.postMessage: .env SLACK is missing')

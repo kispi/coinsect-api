@@ -1,7 +1,7 @@
 name: Deploy to EC2
 
 # 구 방식은 서버에 SSH로 들어가 git pull -> npm install -> npm run build를 서버에서 돌렸다.
-# 이제 빌드는 러너에서 끝내고 산출물만 서버로 복사한다(coinsect_web/coinsect_nuxt와 같은 방식).
+# 이제 빌드는 러너에서 끝내고 산출물만 서버로 복사한다(coinsect-web/coinsect-nuxt와 같은 방식).
 # 서버는 메모리가 작아 빌드가 가장 무거운 단계였고, 서버에서 git pull을 하지 않으므로 배포된
 # 산출물과 커밋의 대응이 러너 쪽 체크아웃 하나로 고정된다.
 #
@@ -65,7 +65,7 @@ jobs:
       - name: Build
         run: npm run build
 
-      # 호스트키를 시크릿에 고정해두고 대조한다(gukto_api/gukto_frontend와 같은 방식).
+      # 호스트키를 시크릿에 고정해두고 대조한다(gukto-api/gukto-frontend와 같은 방식).
       #
       # 구 코드는 `ssh-keyscan -H "$EC2_HOST" >> ~/.ssh/known_hosts` 한 줄이었는데, 그건 접속
       # **직전에** 서버에게 지문을 물어보고 그 답을 그대로 수첩에 적은 뒤 그 수첩과 대조하는
@@ -79,7 +79,7 @@ jobs:
       # 갱신: ssh-keyscan -H webserver.coinsect.io 13.125.248.100 | gh secret set EC2_KNOWN_HOSTS --repo <repo>
       #
       # 시크릿을 env로 받아 printf로 쓴다. `echo "${{ secrets.X }}"`는 시크릿 내용을 셸 소스에
-      # 그대로 박아 bash가 백틱과 ${...}를 해석하게 만든다(coinsect_api의 ormconfig.ts가 실제로
+      # 그대로 박아 bash가 백틱과 ${...}를 해석하게 만든다(coinsect-api의 ormconfig.ts가 실제로
       # 그렇게 깨져 프로덕션이 400을 뱉었다).
       - name: Setup SSH key
         env:
@@ -106,7 +106,7 @@ jobs:
           EC2_HOST: ${{ secrets.EC2_HOST }}
           EC2_USERNAME: ${{ secrets.EC2_USERNAME }}
         run: |
-          REMOTE_DIR="~/web/coinsect_api"
+          REMOTE_DIR="~/web/coinsect-api"
           SSH_CMD="ssh -i ~/.ssh/deploy_key ${EC2_USERNAME}@${EC2_HOST}"
           SCP_CMD="scp -i ~/.ssh/deploy_key"
 
@@ -120,7 +120,7 @@ jobs:
             export NVM_DIR="$HOME/.nvm"
             [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
 
-            cd ~/web/coinsect_api
+            cd ~/web/coinsect-api
             rm -rf deploy_staging
             mkdir deploy_staging
             tar xzf deploy.tar.gz -C deploy_staging
@@ -131,12 +131,12 @@ jobs:
             rm -rf deploy_staging deploy.tar.gz
 
             npm ci --omit=dev
-            pm2 restart coinsect_api || pm2 start npm --name "coinsect_api" -- run prod
+            pm2 restart coinsect-api || pm2 start npm --name "coinsect-api" -- run prod
             pm2 save
           ENDSSH
 
-      # coinsect_api 채널로 보낸다. 방식이 다른 레포(gukto/maple/goapi)와 다르다:
-      # 저쪽은 봇 토큰 + chat.postMessage로 채널을 인자로 지정하지만, 여기서는 coinsect_api가
+      # coinsect-api 채널로 보낸다. 방식이 다른 레포(gukto/maple/goapi)와 다르다:
+      # 저쪽은 봇 토큰 + chat.postMessage로 채널을 인자로 지정하지만, 여기서는 coinsect-api가
       # 이미 쓰고 있는 Incoming Webhook(.env의 SLACK_COINSECT_API, services/slack.ts)을 그대로
       # 쓴다. 웹훅 URL 자체가 채널에 묶여 있어 채널 지정이 필요 없고, 봇 토큰 쪽은 이 워크스페이스에서
       # channels:read 스코프가 없어 채널 목록조차 못 읽는다(chat.postMessage 대상 채널 확인 불가).
@@ -162,9 +162,9 @@ jobs:
           short_sha="${COMMIT_SHA:0:7}"
           first_line="$(printf '%s\n' "${COMMIT_MESSAGE}" | head -n 1)"
           if [[ "${JOB_STATUS}" == "success" ]]; then
-            title=":white_check_mark: coinsect_api *deploy succeeded*"
+            title=":white_check_mark: coinsect-api *deploy succeeded*"
           else
-            title=":x: coinsect_api *deploy failed*"
+            title=":x: coinsect-api *deploy failed*"
           fi
 
           text="$(

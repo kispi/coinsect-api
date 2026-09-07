@@ -142,7 +142,7 @@ test('parseSort: 실재하는 컬럼과 방향만 통과시킨다', () => {
   assert.throws(() => parseSort('amountUsd', 'asc; DROP TABLE users', meta, 'WhaleAlert'), FilterError)
 })
 
-// coinsect_admin의 데이터 테이블이 profile.nickname, blockchain.name 같은 조인 컬럼으로
+// coinsect-admin의 데이터 테이블이 profile.nickname, blockchain.name 같은 조인 컬럼으로
 // 정렬하고 검색한다. 별칭은 같은 요청의 ?join=이 만든 것이어야 한다.
 const postMeta = () => fakeMeta({
   name: 'Post',

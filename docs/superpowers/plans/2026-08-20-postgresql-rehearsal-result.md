@@ -108,9 +108,9 @@ API와 함께 나가야 하므로 배포 시점에 맞춰 올린다.
 
 | 저장소 | 커밋 | 검증 |
 |---|---|---|
-| `coinsect_nuxt` | `feat: 쿼리 빌더를 새 where DSL로 옮긴다` | 테스트 186개 통과, 타입 오류 증가 0 |
-| `coinsect_web` | 〃 | 테스트 497개 통과, `nuxt typecheck` 종료 코드 0 |
-| `coinsect_admin` | 〃 + `fix: 배열 쿼리 파라미터가 where[]로...` | lint 통과, `vite build` 성공 |
+| `coinsect-nuxt` | `feat: 쿼리 빌더를 새 where DSL로 옮긴다` | 테스트 186개 통과, 타입 오류 증가 0 |
+| `coinsect-web` | 〃 | 테스트 497개 통과, `nuxt typecheck` 종료 코드 0 |
+| `coinsect-admin` | 〃 + `fix: 배열 쿼리 파라미터가 where[]로...` | lint 통과, `vite build` 성공 |
 
 부록 B의 지시대로 옮겼고, 실제 API(리허설 DB)를 상대로 클라이언트가 만드는 URL을
 그대로 호출해 확인했다 — 커뮤니티 목록/공지/키워드 검색, 대시보드 최근글, 고래알림
@@ -122,7 +122,7 @@ API와 함께 나가야 하므로 배포 시점에 맞춰 올린다.
 `where`는 반복 파라미터인데 axios 기본 직렬화는 `where[]=a&where[]=b`를 만든다.
 서버는 `query['where']`를 읽으므로 키가 어긋나 **필터가 조용히 전부 무시된다** — 400도
 안 나고 결과만 틀린다. 실제 요청을 떠서 확인했고 `paramsSerializer`로 고쳤다.
-`coinsect_nuxt`/`coinsect_web`이 쓰는 ofetch(ufo)는 원래부터 `where=a&where=b`로
+`coinsect-nuxt`/`coinsect-web`이 쓰는 ofetch(ufo)는 원래부터 `where=a&where=b`로
 펼치므로 문제가 없었다(이것도 직접 확인했다).
 
 **2. 어드민 빌더의 `queryParams`는 계속 공개해야 한다.**

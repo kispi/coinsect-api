@@ -17,7 +17,7 @@
 - `reactions.message_id`의 FK는 `messages_202605`를 가리킨다. 운영과 1:1로 보존한다. **고치지 말 것** — 별개 작업이다.
 - 이번 범위는 SQLi 한정이다. 인증, 비밀번호 해싱, 자격증명 평문 보관은 건드리지 않는다.
 - 커밋 메시지는 한국어, 기존 저장소 스타일(`type: 동사로 끝나는 한 줄`)을 따른다.
-- `?where=`의 클라이언트는 `coinsect_nuxt`, `coinsect_web`, `coinsect_admin` 세 곳이다(`coinsect_frontend`는 삭제된 레거시). 서버에서 `decodeURI`를 빼므로 세 저장소의 쿼리빌더에서 `encodeURI`도 같이 빼야 한다 — 부록 참고. **API 배포와 세 클라이언트 배포는 함께 나가야 한다.**
+- `?where=`의 클라이언트는 `coinsect-nuxt`, `coinsect-web`, `coinsect-admin` 세 곳이다(`coinsect_frontend`는 삭제된 레거시). 서버에서 `decodeURI`를 빼므로 세 저장소의 쿼리빌더에서 `encodeURI`도 같이 빼야 한다 — 부록 참고. **API 배포와 세 클라이언트 배포는 함께 나가야 한다.**
 - 자격증명: PostgreSQL `webserver.coinsect.io:5432`, 롤/DB 모두 `coinsect`, 비밀번호는 기존 MySQL과 동일. SSH는 `C:\Users\kispi\Desktop\aws\kispi-seoul.pem`, 사용자 `ubuntu`.
 
 ---
@@ -138,7 +138,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **설계 노트 1 — 프로퍼티명으로 정규화한다.** `ParsedFilter.property`는 DB 컬럼명이 아니라 **엔티티 프로퍼티명**을 담는다. TypeORM QueryBuilder는 `alias.propertyName`을 실제 컬럼으로 번역해 주므로, 이렇게 해야 `SnakeNamingStrategy`에 결합되지 않는다. 입력은 프로퍼티명(`amountUsd`)과 DB 컬럼명(`amount_usd`) 둘 다 받는다 — 기존 호출부가 후자를 쓴다.
 
-**설계 노트 2 — 점 표기를 지원해야 한다.** `coinsect_admin`의 데이터 테이블이 `profile.nickname`, `post.title`, `blockchain.name`, `message.text` 같은 조인 컬럼으로 정렬하고 검색한다(`src/models/{user,reaction,wallet,chat-user}.js`). 구 `columnWithTable`도 `if (column.includes('.')) return column`으로 이를 통과시켰다. 따라서 `where`와 `sort` 모두 `별칭.컬럼`을 받아야 하고, 그 별칭은 **같은 요청의 `?join=`이 만든 것**이어야 한다. 그래서 `parseJoins`가 먼저 돌아 별칭 맵을 만들고, `parseFilters`와 `parseSort`가 그 맵을 받는다.
+**설계 노트 2 — 점 표기를 지원해야 한다.** `coinsect-admin`의 데이터 테이블이 `profile.nickname`, `post.title`, `blockchain.name`, `message.text` 같은 조인 컬럼으로 정렬하고 검색한다(`src/models/{user,reaction,wallet,chat-user}.js`). 구 `columnWithTable`도 `if (column.includes('.')) return column`으로 이를 통과시켰다. 따라서 `where`와 `sort` 모두 `별칭.컬럼`을 받아야 하고, 그 별칭은 **같은 요청의 `?join=`이 만든 것**이어야 한다. 그래서 `parseJoins`가 먼저 돌아 별칭 맵을 만들고, `parseFilters`와 `parseSort`가 그 맵을 받는다.
 
 **설계 노트 3 — 조인 별칭은 관계명을 쓴다.** 구 코드는 `tb_${idx}`를 별칭으로 썼는데, 클라이언트는 `blockchain.name`처럼 **관계명**으로 컬럼을 가리킨다. 즉 별칭과 참조가 어긋나 있었다(어드민의 조인 컬럼 정렬이 실제로 동작했는지 의심스럽다). 별칭을 관계 프로퍼티명으로 맞추면 `?join=Wallet.blockchain`과 `?sort=blockchain.name`이 자연스럽게 이어진다.
 
@@ -291,7 +291,7 @@ test('parseSort: 실재하는 컬럼과 방향만 통과시킨다', () => {
   assert.throws(() => parseSort('amountUsd', 'asc; DROP TABLE users', meta, 'WhaleAlert'), FilterError)
 })
 
-// coinsect_admin의 데이터 테이블이 profile.nickname, blockchain.name 같은 조인 컬럼으로
+// coinsect-admin의 데이터 테이블이 profile.nickname, blockchain.name 같은 조인 컬럼으로
 // 정렬하고 검색한다. 별칭은 같은 요청의 ?join=이 만든 것이어야 한다.
 const postMeta = () => fakeMeta({
   name: 'Post',
@@ -431,7 +431,7 @@ export const resolveProperty = (meta: EntityMetadata, field: string): string => 
 
 /**
  * '별칭.컬럼' 또는 '컬럼'을 해석한다. 별칭이 붙으면 같은 요청의 ?join=이 만든 것이어야
- * 한다 - coinsect_admin이 profile.nickname, blockchain.name 같은 조인 컬럼으로 정렬하고
+ * 한다 - coinsect-admin이 profile.nickname, blockchain.name 같은 조인 컬럼으로 정렬하고
  * 검색하기 때문이다.
  */
 export const resolveField = (
@@ -935,7 +935,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 - [ ] **Step 6b: `wallet_controller.ts`의 조인 별칭을 관계명으로 바꾼다**
 
-`controllers/wallet_controller.ts:8`이 `leftJoinAndSelect('Wallet.blockchain', 'tb_0')`으로 별칭을 하드코딩하고 있다. 그런데 `coinsect_admin`의 `ViewWallets.vue`가 같은 관계를 `?join=Wallet.blockchain`으로도 요청하고, 어드민 모델(`src/models/wallet.js`)은 컬럼을 `blockchain.id`, `blockchain.name`으로 가리킨다. 즉 별칭(`tb_0`)과 참조(`blockchain`)가 어긋나 있었다.
+`controllers/wallet_controller.ts:8`이 `leftJoinAndSelect('Wallet.blockchain', 'tb_0')`으로 별칭을 하드코딩하고 있다. 그런데 `coinsect-admin`의 `ViewWallets.vue`가 같은 관계를 `?join=Wallet.blockchain`으로도 요청하고, 어드민 모델(`src/models/wallet.js`)은 컬럼을 `blockchain.id`, `blockchain.name`으로 가리킨다. 즉 별칭(`tb_0`)과 참조(`blockchain`)가 어긋나 있었다.
 
 Task 3에서 `?join=`의 별칭이 관계명이 되므로 여기도 맞춘다.
 
@@ -1015,7 +1015,7 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 `services/post.ts:62`의 `c.req.query['query']`는 LLM에게 던지는 자연어 질문이다. Step 1에서 목록 검색이 `keyword`로 빠졌으므로 `query`가 두 뜻으로 쓰이지 않도록 `question`으로 바꾼다. 같은 함수의 `board_id`도 나머지 API와 맞춰 `boardId`로 바꾼다.
 
-`/posts/with_llm`은 `coinsect_web`(btc.coinsect.io)의 `app/services/post.ts:41`이 호출한다. 그 파일은 `where`와 `keyword` 때문에 어차피 고쳐야 하므로 같은 커밋에서 함께 바꾼다 — 부록 B 참고.
+`/posts/with_llm`은 `coinsect-web`(btc.coinsect.io)의 `app/services/post.ts:41`이 호출한다. 그 파일은 `where`와 `keyword` 때문에 어차피 고쳐야 하므로 같은 커밋에서 함께 바꾼다 — 부록 B 참고.
 
 ```ts
   allWithLLM: async (c: IContext) => {
@@ -1112,7 +1112,7 @@ const activityQuery = ({ tablename, start, end }: { tablename: string, start?: s
 
 - [ ] **Step 4: `whale_alert`에 전용 필터 파라미터를 추가한다**
 
-`coinsect_nuxt`의 "거래소 간 이동 제외" 필터가 아래 조건을 보내고 있다.
+`coinsect-nuxt`의 "거래소 간 이동 제외" 필터가 아래 조건을 보내고 있다.
 
 ```
 (from_owner_type != "unknown" XOR to_owner_type != "unknown")
@@ -1125,7 +1125,7 @@ const activityQuery = ({ tablename, start, end }: { tablename: string, start?: s
 `services/onchain/whale_alert.ts`에 아래를 추가하고 export한다.
 
 ```ts
-// coinsect_nuxt의 excludeBetweenSameExchange 필터. 한쪽만 알려진 주체인 거래를 남긴다.
+// coinsect-nuxt의 excludeBetweenSameExchange 필터. 한쪽만 알려진 주체인 거래를 남긴다.
 // 구 프론트는 MySQL 전용 XOR을 직접 보냈는데, PostgreSQL에는 XOR이 없고 화이트리스트
 // DSL로 표현할 수도 없어서 서버가 이름으로 받는다.
 export const applyExcludeBetweenSameExchange = (qb: SelectQueryBuilder<WhaleAlert>) => {
@@ -2237,7 +2237,7 @@ Expected: 작업 트리 깨끗, Task 1~9의 커밋이 전부 올라가 있음
 
 ```bash
 ssh -i <pem> ubuntu@webserver.coinsect.io
-pm2 stop coinsect_api   # 또는 현재 프로세스 관리 방식에 맞게
+pm2 stop coinsect-api   # 또는 현재 프로세스 관리 방식에 맞게
 ```
 
 실제 기동 방식은 `.github/workflows/deploy.yml`의 마지막 SSH 블록을 먼저 읽어 확인한다.
@@ -2258,20 +2258,20 @@ Expected: `전부 일치`
 `EC2_ORMCONFIG`를 PostgreSQL용 `ormconfig.ts` 내용으로 바꾼다.
 
 ```bash
-gh secret set EC2_ORMCONFIG --repo kispi/coinsect_api < ormconfig.ts
+gh secret set EC2_ORMCONFIG --repo kispi/coinsect-api < ormconfig.ts
 ```
 
 - [ ] **Step 5: 배포 — API와 세 클라이언트를 함께 내보낸다**
 
-새 API는 구 `?where=` 문법을 400으로 거부한다. `coinsect_nuxt`, `coinsect_web`, `coinsect_admin`의 부록 작업이 끝나 있어야 하고, 네 배포가 같이 나가야 한다. API를 먼저 올리면 그 사이 커뮤니티 목록·고래알림 필터·어드민 테이블 검색이 전부 400을 뱉는다.
+새 API는 구 `?where=` 문법을 400으로 거부한다. `coinsect-nuxt`, `coinsect-web`, `coinsect-admin`의 부록 작업이 끝나 있어야 하고, 네 배포가 같이 나가야 한다. API를 먼저 올리면 그 사이 커뮤니티 목록·고래알림 필터·어드민 테이블 검색이 전부 400을 뱉는다.
 
 ```bash
-gh workflow run "Deploy to EC2" --repo kispi/coinsect_api
-gh run watch --repo kispi/coinsect_api
+gh workflow run "Deploy to EC2" --repo kispi/coinsect-api
+gh run watch --repo kispi/coinsect-api
 ```
 Expected: 성공. "Verify ormconfig.ts survived shell expansion" 단계도 통과해야 한다
 
-이어서 `coinsect_nuxt`, `coinsect_web`, `coinsect_admin`을 배포한다.
+이어서 `coinsect-nuxt`, `coinsect-web`, `coinsect-admin`을 배포한다.
 
 - [ ] **Step 6: smoke test**
 
@@ -2355,11 +2355,11 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>"
 
 **리스크 대응 커버리지:** 타임존 → Task 7/9 + verify의 경계값 대조. 시퀀스 → Task 9 `resetSequences` + Task 11 Step 6. 메모리 → `BATCH = 1000`. 하드 삭제 → README에 명시.
 
-**클라이언트 영향 (조사 완료):** `?where=`의 클라이언트는 `coinsect_nuxt`(4곳), `coinsect_web`(1곳), `coinsect_admin`(1곳, 제네릭 데이터 테이블)이다. `coinsect_frontend`는 삭제된 레거시라 제외했다. 조사에서 나온 것들:
+**클라이언트 영향 (조사 완료):** `?where=`의 클라이언트는 `coinsect-nuxt`(4곳), `coinsect-web`(1곳), `coinsect-admin`(1곳, 제네릭 데이터 테이블)이다. `coinsect_frontend`는 삭제된 레거시라 제외했다. 조사에서 나온 것들:
 
-- `coinsect_nuxt`의 고래알림 "거래소 간 이동 제외" 필터가 **MySQL 전용 `XOR`**을 보내고 있었다. DSL과 무관하게 PostgreSQL에서 깨지므로 Task 6 Step 4에서 전용 파라미터로 옮긴다. DSL로 표현이 안 되는 유일한 조건이다.
+- `coinsect-nuxt`의 고래알림 "거래소 간 이동 제외" 필터가 **MySQL 전용 `XOR`**을 보내고 있었다. DSL과 무관하게 PostgreSQL에서 깨지므로 Task 6 Step 4에서 전용 파라미터로 옮긴다. DSL로 표현이 안 되는 유일한 조건이다.
 - 양쪽 쿼리빌더가 `encodeURI`를 걸고 서버가 `decodeURI`로 되돌리는 이중 인코딩 구조였다. 서버에서 `decodeURI`가 빠지므로 클라이언트도 함께 고쳐야 한다.
-- `coinsect_admin`의 `hooks/table.js` URL 직렬화가 인코딩을 전혀 하지 않는다. 값에 `&`가 들어가면 URL이 깨진다.
+- `coinsect-admin`의 `hooks/table.js` URL 직렬화가 인코딩을 전혀 하지 않는다. 값에 `&`가 들어가면 URL이 깨진다.
 
 세부는 부록 B에 있다. **API와 세 클라이언트 배포는 함께 나가야 한다** (Task 11 Step 5).
 
@@ -2376,7 +2376,7 @@ Task 3 Step 5의 산출물이다. 아래 `---` 사이의 내용을 `docs/api/que
 # 목록 조회 쿼리 프로토콜
 
 `orm.querySetter`를 쓰는 모든 목록 엔드포인트가 받는 공통 쿼리 파라미터다.
-`coinsect_nuxt`와 `coinsect_admin`이 이 계약에 맞춰 요청을 만든다. 세 저장소의 단일
+`coinsect-nuxt`와 `coinsect-admin`이 이 계약에 맞춰 요청을 만든다. 세 저장소의 단일
 출처이므로, 문법을 바꾸려면 이 문서를 먼저 고친다.
 
 2026-08-19 이전에는 `where`가 임의 SQL 조각이었고 서버가 그대로 WHERE 절에 이어
@@ -2466,7 +2466,7 @@ OR나 괄호 그룹은 지원하지 않는다. 필요하면 그 엔드포인트�
 ## 부록 B: 클라이언트 저장소 변경
 
 `?where=`를 쓰는 곳을 실제로 조사한 결과다. 클라이언트는 **세 개**다 —
-`coinsect_nuxt`(coinsect.io), `coinsect_web`(btc.coinsect.io), `coinsect_admin`.
+`coinsect-nuxt`(coinsect.io), `coinsect-web`(btc.coinsect.io), `coinsect-admin`.
 `coinsect_frontend`는 삭제된 레거시라 제외했다.
 
 이 저장소 밖이므로 별도 작업이지만 **API 배포와 함께 나가야 한다** — 새 서버는 구 문법을
@@ -2532,7 +2532,7 @@ export const qb = () => {
 }
 ```
 
-### `coinsect_nuxt`
+### `coinsect-nuxt`
 
 `app/utils/querybuilder.ts`를 위 형태로 교체하고 호출부를 고친다.
 
@@ -2558,9 +2558,9 @@ export const qb = () => {
 
 `tests/utils/querybuilder.spec.ts`도 새 API에 맞춰 다시 쓴다.
 
-### `coinsect_web` (btc.coinsect.io)
+### `coinsect-web` (btc.coinsect.io)
 
-`app/utils/querybuilder.ts`가 `coinsect_nuxt`와 같은 파일이다(`base()`의 기본 `limit`만 10으로
+`app/utils/querybuilder.ts`가 `coinsect-nuxt`와 같은 파일이다(`base()`의 기본 `limit`만 10으로
 다르다). 위 형태로 교체하되 `base()`의 10은 유지한다.
 
 호출부는 `app/services/post.ts` 한 곳에 몰려 있다.
@@ -2577,7 +2577,7 @@ export const qb = () => {
 
 `app/types/api/post.ts:75`의 응답 타입은 바뀌지 않는다.
 
-### `coinsect_admin`
+### `coinsect-admin`
 
 `src/helpers/querybuilder.js`를 위 형태로 교체한다. 그 외 세 곳이 함께 바뀐다.
 

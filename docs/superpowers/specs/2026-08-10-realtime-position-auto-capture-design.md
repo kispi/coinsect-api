@@ -1,7 +1,7 @@
 # 실시간 포지션 자동 캡처·인식 설계
 
 - 작성일: 2026-08-10
-- 범위: `coinsect_api`, `coinsect_admin`
+- 범위: `coinsect-api`, `coinsect-admin`
 - 상태: 설계 승인됨 (구현 계획 대기)
 
 ## 1. 배경

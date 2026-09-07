@@ -1,5 +1,5 @@
 {
-  "name": "coinsect_api",
+  "name": "coinsect-api",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
@@ -12,13 +12,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/kispi/coinsect_api.git"
+    "url": "git+https://github.com/kispi/coinsect-api.git"
   },
   "author": "kispi@naver.com",
   "bugs": {
-    "url": "https://github.com/kispi/coinsect_api/issues"
+    "url": "https://github.com/kispi/coinsect-api/issues"
   },
-  "homepage": "https://github.com/kispi/coinsect_api#readme",
+  "homepage": "https://github.com/kispi/coinsect-api#readme",
   "engines": {
     "node": ">=22.12.0"
   },

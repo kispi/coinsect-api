@@ -126,7 +126,7 @@ const realTimePositionService = {
             계약: ${payload['contract']}
             방송: ${payload['onAir']}
           `,
-          channel: 'coinsect_api',
+          channel: 'coinsect-api',
         })
         return notifiedPositionHistories
       } catch (e) {
