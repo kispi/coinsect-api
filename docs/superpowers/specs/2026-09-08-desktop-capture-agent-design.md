@@ -59,7 +59,7 @@ EC2에서 `yt-dlp`가 라이브 URL을 해석하지 못하고, 쿠키 우회도 
        7. 제보 등록  포지션이 실제로 바뀌었을 때만
        8. 슬랙       링크 걸린 방송명 + [승인] [거절] 버튼
                           ↓
-[슬랙]  9. 클릭      POST /slack/interactions (서명 검증)
+[슬랙]  9. 클릭      POST /slack/interactions
        10. 승인 시   realTimePositionService.set → broadcast + 푸시
 ```
 
@@ -133,12 +133,14 @@ fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 p
 
 ### 4.3 인증
 
-공유 시크릿 헤더 하나(`X-Desktop-Secret`)로 끝낸다.
+공유 시크릿 헤더 하나(`X-Desktop-Secret`)를 단순 문자열 비교한다.
+
+이 값이 남아 있는 이유는 방어보다 **식별**이다. 서버가 "이 요청이 데스크톱 클라이언트다"를
+판단해야 요청자를 `coinsect-api-desktop`으로 표기하고 §5.2의 데스크톱 레인으로 보낼 수 있다.
+겸사겸사 열린 엔드포인트로 Gemini 호출이 낭비되는 것도 막는다.
 
 관리자 JWT를 쓰지 않는 이유는 `core/helpers/jwt.ts:11`의 `expiresIn: 60*60*24*28` 때문이다.
 `.env`에 토큰을 박아두면 **28일마다 조용히 죽고**, 집 기계에서 401을 뒤늦게 발견하게 된다.
-
-시크릿은 타이밍 세이프 비교(`crypto.timingSafeEqual`)로 대조한다.
 
 ## 5. 제보함
 
@@ -192,24 +194,29 @@ fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 p
 슬랙은 `application/x-www-form-urlencoded`로 보내는데 현재 fastify에는 CORS 외에
 아무 body 파서도 붙어 있지 않다(`server_modules.ts:99~`). `@fastify/formbody`를 추가한다.
 
-**함정: 서명 검증은 파싱 전 원문(raw body)으로 해야 한다.** 파서가 원문을 보존하도록 구성해야 하며,
-이 순서가 어긋나면 검증이 조용히 항상 실패하거나(더 나쁘게) 항상 통과한다.
+본문은 `payload` 필드 안에 JSON 문자열로 들어온다. 한 번 더 `JSON.parse` 해야 한다.
 
 슬랙은 3초 내 200 응답을 요구한다. 즉시 응답하고, 실제 반영과 메시지 갱신은
 페이로드의 `response_url`로 이어서 처리한다.
 
-### 6.3 인가 — 이 기능에서 가장 중요한 부분
+### 6.3 인가 — 두지 않는다
 
-**승인 클릭 = 전 사용자 푸시 발송이다.** 두 겹으로 막는다.
+슬랙 서명 검증(`SLACK_SIGNING_SECRET`)도, 승인자 허용 목록(`SLACK_APPROVER_IDS`)도 두지 않는다.
 
-1. **슬랙 서명 검증.** `X-Slack-Signature` / `X-Slack-Request-Timestamp`를 Signing Secret으로
-   HMAC-SHA256 대조하고, 타임스탬프가 5분을 넘으면 거부한다(리플레이 방지).
-   비교는 타이밍 세이프로 한다.
-   **이게 없으면 엔드포인트 주소만 아는 사람이 임의의 값으로 전체 푸시를 쏠 수 있다.**
-2. **승인자 허용 목록.** 페이로드의 `user.id`를 `SLACK_APPROVER_IDS`와 대조한다.
-   채널에 있는 아무나 누를 수 있으면 안 된다. 목록 밖이면 ephemeral 메시지로 거절을 알린다.
+운영자가 1인이고 워크스페이스가 비공개이며, 최악의 결과가 **잘못된 포지션이 푸시로 나가는 것**
+— 즉 사람이 어드민에서 고치면 되는 일 — 이므로 방어 비용이 이득을 넘는다.
+
+위조 난이도가 0이 되는 것도 아니다. §6.4의 stale 방어가 승인 처리의 전제로
+`positionId`와 `reportedAt`이 **현재 저장된 제보와 정확히 일치할 것**을 요구하는데,
+이 쌍은 추측할 수 없고 `GET /contents/real_time_positions`의 응답도 암호화되어 있다.
+결과적으로 서명 검증이 추가로 막아주는 몫이 크지 않다.
+
+나중에 필요해지면 서명 검증은 Node 내장 `crypto`로 10줄 남짓이므로 언제든 되돌릴 수 있다.
 
 ### 6.4 stale 클릭 방어
+
+**보안이 아니라 정확성을 위한 장치다.** 없으면 3일 전 슬랙 메시지를 눌렀을 때
+낡은 포지션이 전체 푸시로 나간다. 본인이 제일 먼저 밟게 되는 버그다.
 
 버튼 값의 `reportedAt`을 제보함의 현재 항목과 대조한다.
 
@@ -241,8 +248,7 @@ fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 p
 | yt-dlp 봇 차단 | 집에서 발생할 일은 아니지만, 발생 시 로그만 남기고 다음 대상으로 |
 | 프레임 인식 전부 실패 | `link`/`onAir`는 이미 반영됨. 제보만 생략 |
 | 본문 크기 초과 | per-route `bodyLimit` 상향으로 방지. 그래도 넘치면 프레임 수를 줄여 재시도 |
-| 슬랙 서명 불일치 | 401. 로그를 남긴다 (공격 신호일 수 있음) |
-| 승인자 목록 밖 | ephemeral 거절 메시지 |
+| 데스크톱 시크릿 불일치 | 401 |
 
 `yt-dlp`/`ffmpeg` 하위 프로세스는 기존과 같이 타임아웃과 함께 실행한다.
 
@@ -254,7 +260,6 @@ fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 p
 |---|---|
 | 중복 억제 (§5.3) | canonical과 같음 / 직전 제보와 같음 / 둘 다 다름 — 알림 발생 여부 |
 | 레인 분리 (§5.2) | 데스크톱 제보 다수가 사람 제보 5건을 밀어내지 않는다 |
-| 슬랙 서명 검증 (§6.3) | 정상 / 변조 본문 / 5분 초과 타임스탬프 / 헤더 누락 |
 | stale 방어 (§6.4) | `reportedAt` 일치 / 불일치 / 제보 없음 |
 | `link`·`onAir` 갱신 (§4.2) | 이 갱신만으로는 `broadcast`와 푸시가 발생하지 않는다 |
 
@@ -271,11 +276,10 @@ fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 p
    Interactivity를 켤 앱을 정한다.
 2. 앱 설정 → **Interactivity & Shortcuts** 활성화, Request URL을
    `https://api.coinsect.io/slack/interactions`로 등록
-3. **Basic Information → App Credentials → Signing Secret** 을 `.env`의 `SLACK_SIGNING_SECRET`에
-4. 승인을 허용할 슬랙 사용자 ID를 `SLACK_APPROVER_IDS`에 (쉼표 구분)
-5. `DESKTOP_SECRET`을 임의의 긴 랜덤 문자열로 생성해 서버와 `capture_desktop/.env` 양쪽에
+3. `DESKTOP_SECRET`을 임의의 랜덤 문자열로 생성해 서버와 `capture_desktop/.env` 양쪽에
 
-메시지 갱신은 인터랙션 페이로드의 `response_url`로 하므로 **봇 토큰은 필요 없다.**
+**슬랙 쪽에서 필요한 것은 2번 하나뿐이다.** §6.3에 따라 Signing Secret도 승인자 목록도 쓰지 않고,
+메시지 갱신은 인터랙션 페이로드의 `response_url`로 하므로 봇 토큰도 필요 없다.
 
 ## 10. 이번 범위에서 제외
 
