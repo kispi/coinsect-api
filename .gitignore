@@ -12,3 +12,4 @@ proxy_upbit/proxy_upbit
 ormconfig.ts
 ormconfig.postgre.md
 .omc/
+.env.bak-*
