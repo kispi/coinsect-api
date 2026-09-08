@@ -1,12 +1,10 @@
 import { GoogleGenAI } from '@google/genai'
-import axios from 'axios'
-import { resolveLiveStream, captureFrames } from './live_capture'
 import store from '../../store'
 import helpers from '../../core/helpers'
 import useCache from '../../core/cache'
 import presets from '../../constants/position_presets'
 import IContext from '../../core/interfaces/context'
-import slackService from '../slack'
+import positionReports, { positionHasChanged, IPositionReport } from './position_reports'
 import chatService from '../chat'
 
 const now = () => helpers.dayjs().format()
@@ -58,16 +56,6 @@ let cachedPositions = {
   lastUpdate: null,
 }
 
-let notifiedPositionHistories = []
-
-const removeNotifiedPositionHistoriesOf = id => {
-  const idx = notifiedPositionHistories.findIndex(o => o.id === id)
-  if (idx < 0) return
-
-  notifiedPositionHistories.splice(idx, 1)
-  removeNotifiedPositionHistoriesOf(id)
-}
-
 const setRealTimePositions = async o => {
   o.lastUpdate = now()
   cache.set('content:realTimePositions', o)
@@ -82,20 +70,18 @@ const setRealTimePositions = async o => {
   }
 }
 
-const positionHasChanged = (a, b) => ['contract', 'entryPrice', 'liqPrice', 'size'].some(field =>
-  (a[field] && !b[field]) ||
-  (!a[field] && b[field]) ||
-  (a[field] && b[field] && a[field] != b[field])
-)
+// 제보 하나를 만들어 저장하고 슬랙으로 알린다. 두 레인이 공유하는 마지막 단계다.
+const fileReport = async (report: IPositionReport) => {
+  await positionReports.put(report)
+  await positionReports.notify(report)
+  return report
+}
 
 const realTimePositionService = {
   presets: () => presets,
   changeNotification: {
-    delete: id => {
-      const idx = notifiedPositionHistories.findIndex(o => o.id === id)
-      if (idx >= 0) notifiedPositionHistories.splice(idx, 1)
-    },
-    all: () => notifiedPositionHistories,
+    delete: (id: string) => positionReports.remove(id),
+    all: () => positionReports.all(),
     create: async (c: IContext) => {
       const found = cachedPositions.data.find(o => o.id === c.req.body['id'])
       if (found && !found.editable) return Promise.reject({ message: '수정이 불가능한 포지션입니다.' })
@@ -106,29 +92,22 @@ const realTimePositionService = {
 
       try {
         await realTimePositionService.validate(payload)
-        const acceptable = {
-          ip: c.req.ip,
-          requestedAt: now(),
-        }
-        const keys = ['id', 'liqPrice', 'entryPrice', 'size', 'contract', 'name', 'image', 'link', 'onAir', 'token']
-        keys.filter(key => payload[key]).forEach(key => acceptable[key] = payload[key])
-        notifiedPositionHistories.push(acceptable)
-        notifiedPositionHistories = notifiedPositionHistories.slice(-5) // 최근 5개까지만 유지
         const u = await chatService.getUser(payload['token'])
-        slackService.postMessage({
-          text: `
-            포지션 수정 요청이 들어왔습니다
-            요청자: ${u.profile.nickname} (${c.req.ip} / ${u.token})\n
-            스트리머: *${payload['name']}*
-            진입: ${payload['entryPrice']}
-            청산: ${payload['liqPrice']}
-            규모: ${payload['size']}
-            계약: ${payload['contract']}
-            방송: ${payload['onAir']}
-          `,
-          channel: 'coinsect-api',
+
+        return await fileReport({
+          id: payload['id'],
+          lane: 'human',
+          requester: `${u.profile.nickname} / ${u.token}`,
+          ip: c.req.ip,
+          name: payload['name'] || (found || {}).name,
+          link: (found || {}).link,
+          contract: payload['contract'],
+          entryPrice: payload['entryPrice'],
+          liqPrice: payload['liqPrice'],
+          size: payload['size'],
+          onAir: payload['onAir'],
+          reportedAt: now(),
         })
-        return notifiedPositionHistories
       } catch (e) {
         return Promise.reject(e)
       }
@@ -201,7 +180,7 @@ const realTimePositionService = {
         found.channelUrl = (payload.channelUrl || '').trim()
         found.editable = payload.editable
       }
-      removeNotifiedPositionHistoriesOf(found.id)
+      await positionReports.remove(found.id)
 
       if (changed) {
         found.lastUpdate = now()
@@ -298,61 +277,96 @@ const realTimePositionService = {
     })
     return result.text
   },
-  // 채널 URL만으로 라이브 화면을 직접 떠서 인식한다. 프레임마다 따로 인식시키고
-  // 판정은 하지 않는다 — 후보를 나란히 보여주고 관리자가 고른다.
-  autoCapture: async ({
-    channelUrl,
-    prompt,
-    frames,
-    interval,
-  }: {
-    channelUrl: string,
-    prompt?: string,
-    frames?: number,
-    interval?: number,
-  }) => {
-    const count = Math.min(Math.max(parseInt(String(frames)) || 3, 1), 5)
-    const intervalSeconds = Math.min(Math.max(parseInt(String(interval)) || 4, 1), 10)
-
-    const { videoId, hlsUrl } = await resolveLiveStream(channelUrl)
-    const images = await captureFrames(hlsUrl, count, intervalSeconds)
-    if (images.length === 0) throw { message: '화면을 캡처하지 못했습니다.' }
-
-    const candidates = await Promise.all(images.map(async base64 => {
-      const image = `data:image/jpeg;base64,${base64}`
-      try {
-        const parsed = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg', prompt }))
-        return { image, position: parsed, failed: false }
-      } catch (e) {
-        return { image, position: null, failed: true }
-      }
-    }))
-
-    if (candidates.every(o => o.failed)) throw { message: '화면에서 포지션을 찾지 못했습니다.' }
-
-    return { videoId, candidates }
+  // 집에서 도는 capture_desktop이 캡처 대상을 물어본다.
+  desktopTargets: async () => {
+    const { data } = await realTimePositionService.all()
+    return data
+      .filter(o => o.channelUrl)
+      .map(({ id, name, channelUrl }) => ({ id, name, channelUrl }))
   },
-  autoCrawl: async ({
-    youtubeHandle,
-    channelTitle,
+  // capture_desktop이 뜬 프레임을 받아 인식하고, 바뀌었을 때만 제보한다.
+  desktopReport: async ({
+    positionId,
+    videoId,
+    isLive,
+    images,
   }: {
-    youtubeHandle: string,
-    channelTitle?: string,
+    positionId: string,
+    videoId?: string,
+    isLive: boolean,
+    images?: string[],
   }) => {
-    const apikey = store.state.serverConfig.GOOGLE_AI_STUDIO
-    try {
-      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${youtubeHandle}&type=channel&key=${apikey}`
-      const resp = await axios.get(url)
-      const found = resp['items'].find(item => item.snippet.channelTitle === channelTitle) || resp['items'][0]
-      if (!found) return
+    const { data } = await realTimePositionService.all()
+    const found = data.find(o => o.id === positionId)
+    if (!found) throw { message: '해당 포지션을 찾을 수 없습니다.' }
 
-      const channelId = found.id.channelId
-      const resp2 = await axios.get(`https://www.googleapis.com/youtube/v3/search?part=snippet&channelId=${channelId}&eventType=live&type=video&key=${apikey}`)
-      const videoId = resp2['items'][0].id.videoId
-      return videoId
-    } catch (e) {
-      return Promise.reject(e)
+    // 방송 상태와 링크는 canonical에 바로 반영한다. positionHasChanged가 보는 필드가
+    // 아니므로 여기서는 브로드캐스트도 푸시도 발생하지 않는다.
+    found.onAir = isLive
+    if (isLive && videoId) found.link = `https://www.youtube.com/watch?v=${videoId}`
+    found.lastUpdate = now()
+    await setRealTimePositions(cachedPositions)
+
+    if (!isLive) return { isLive, reported: false, reason: '방송 중이 아님' }
+
+    // 판정 계층은 아직 없다. 먼저 읽힌 프레임을 그대로 쓴다.
+    let parsed = null
+    for (const base64 of images || []) {
+      try {
+        parsed = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg' }))
+        break
+      } catch (e) { /* 프레임마다 가려지는 정도가 달라 실패는 흔하다. 다음 장을 본다. */ }
     }
+    if (!parsed) return { isLive, reported: false, reason: '화면에서 포지션을 찾지 못함' }
+
+    if (!positionHasChanged(found, parsed)) return { isLive, reported: false, reason: '기존 포지션과 동일' }
+
+    // 관리자가 승인하지 않고 두면 canonical은 계속 낡은 값이라, 위 비교만으로는
+    // 같은 알림이 주기마다 영원히 온다. 직전 제보와도 달라야 다시 알린다.
+    // 값이 같으면 기존 제보를 건드리지 않는다. reportedAt이 바뀌면 이미 보낸
+    // 슬랙 메시지의 버튼이 죽기 때문이다.
+    const previous = await positionReports.find(positionId)
+    if (previous && !positionHasChanged(previous, parsed)) return { isLive, reported: false, reason: '직전 제보와 동일' }
+
+    await fileReport({
+      id: positionId,
+      lane: 'desktop',
+      requester: 'coinsect-api-desktop',
+      name: found.name,
+      link: found.link,
+      contract: parsed.contract,
+      entryPrice: parsed.entryPrice,
+      liqPrice: parsed.liqPrice,
+      size: parsed.size,
+      reportedAt: now(),
+    })
+
+    return { isLive, reported: true, position: parsed }
+  },
+  // 슬랙 버튼에서 온 승인/거절을 적용한다.
+  resolveReport: async ({ id, reportedAt, approve }: { id: string, reportedAt: string, approve: boolean }) => {
+    const report = await positionReports.find(id, reportedAt)
+    if (!report) return { ok: false, message: '제보를 찾을 수 없습니다. (이미 처리됐거나 더 최신 제보가 있습니다)' }
+
+    if (!approve) {
+      await positionReports.remove(id)
+      return { ok: true, message: '거절됨' }
+    }
+
+    // set은 모듈 캐시만 보므로, 재배포 뒤 첫 클릭이 프리셋 기본값에 쓰이지 않도록 먼저 읽어둔다.
+    await realTimePositionService.all()
+
+    // set이 제보를 지우고 broadcast/푸시까지 처리한다.
+    await realTimePositionService.set({
+      id,
+      contract: report.contract,
+      entryPrice: report.entryPrice,
+      liqPrice: report.liqPrice,
+      size: report.size,
+      onAir: true,
+    }, true)
+
+    return { ok: true, message: '승인됨' }
   },
 }
 

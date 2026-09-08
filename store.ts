@@ -30,7 +30,9 @@ const state = {
       backend: null,
     },
   },
-  serverConfig: dotenv.config().parsed,
+  // .env가 없는 환경(테스트, env를 직접 주입하는 배포)에서도 undefined가 되지 않아야
+  // 이 값을 모듈 최상단에서 읽는 곳들이 기동 중에 터지지 않는다.
+  serverConfig: dotenv.config().parsed || process.env,
 }
 
 const actions = {

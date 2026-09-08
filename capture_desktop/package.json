@@ -1,0 +1,11 @@
+{
+  "name": "capture-desktop",
+  "private": true,
+  "description": "가정용 IP에서 유튜브 라이브 프레임을 떠서 coinsect-api로 보낸다",
+  "scripts": {
+    "start": "node --env-file=.env index.js"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

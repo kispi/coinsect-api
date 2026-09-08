@@ -117,8 +117,10 @@ API 서버가 죽어도 이건 죽을 이유가 없다.
 시크릿 헤더 인증. 본문은 `{ positionId, videoId, isLive, images: string[] }`.
 
 **본문 크기 주의.** 프레임 3장이 base64로 부풀면 1MB를 넘긴다.
-fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 per-route `bodyLimit`을 올린다.**
-전역으로 올리면 다른 모든 엔드포인트가 같이 노출되므로 그렇게 하지 않는다.
+fastify 기본 `bodyLimit`이 정확히 1MB이므로 올려야 한다.
+
+구현에서는 **전역 16MB**로 올렸다. per-route 지정은 `core/router.ts`의 헬퍼 시그니처에
+옵션 통로를 새로 뚫어야 하는데, 1인 운영에서 그 복잡도가 얻는 것보다 크다고 봤다.
 
 처리 순서:
 
@@ -126,7 +128,9 @@ fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 p
    `onAir`를 `true`로 둔다. 거짓이면 `onAir`를 `false`로 내리고 `link`는 마지막 값을 유지한다.
    이 갱신은 **canonical state(Redis)에 즉시 반영**하되 `chatService.broadcast`도 푸시도 발생시키지 않는다.
    `positionHasChanged`가 `contract`/`entryPrice`/`liqPrice`/`size`만 보므로 구조적으로 안전하다.
-2. **인식.** `isLive`가 거짓이면 여기서 끝. 참이면 프레임별로 `autoParse`를 독립 호출한다.
+2. **인식.** `isLive`가 거짓이면 여기서 끝. 참이면 프레임을 순서대로 `autoParse`에 넣고
+   **처음 성공한 판독을 그대로 쓴다.** 여러 장을 합의시키는 것은 §10에서 제외한 §4/§5의 몫이다.
+   (선행 스펙 §2.4대로 청산가가 프레임마다 변하므로 단순 다수결은 어차피 성립하지 않는다.)
 3. **제보 등록.** §5의 억제 규칙을 통과할 때만.
 
 인식이 전부 실패해도 1번은 이미 반영됐으므로 방송 상태 추적은 계속 굴러간다.

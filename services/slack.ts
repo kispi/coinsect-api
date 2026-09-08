@@ -10,9 +10,12 @@ const endpoint = {
 
 const postMessage = async ({
   text,
+  blocks,
   channel,
 }: {
   text: string,
+  // 버튼이 달린 메시지는 blocks로 보낸다. 이때 text는 알림 미리보기로만 쓰인다.
+  blocks?: unknown[],
   channel: 'coinsect-api' | 'image-moderation',
 }) => {
   if (!endpoint[channel]) {
@@ -21,7 +24,10 @@ const postMessage = async ({
   }
 
   try {
-    await axios.post(endpoint[channel], { text: helpers.allNewlineTrimmed(text) })
+    // blocks 안의 문단은 이미 정돈된 상태로 오므로 여기서 다시 손대지 않는다.
+    await axios.post(endpoint[channel], blocks
+      ? { text, blocks }
+      : { text: helpers.allNewlineTrimmed(text) })
   } catch (e) {
     return Promise.reject(e)
   }

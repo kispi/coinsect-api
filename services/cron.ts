@@ -4,8 +4,6 @@ import chatService from './chat'
 import whaleAlertService from './onchain/whale_alert'
 import marketInfoService from './market_info'
 import dashboardService from './dashboard'
-// import realTimePositionService from './content/real_time_position'
-// import position_presets from '../constants/position_presets'
 
 const failableCrawl = (minValue: number) => {
   whaleAlertService.crawl(minValue).then().catch(() => {})
@@ -42,19 +40,6 @@ const cronService = {
       },
       interval: 1000 * 60,
     })
-    // cron.addJob({
-    //   id: 'autoUpdatePositions',
-    //   runnable: async () => {
-    //     position_presets.slice(0, 3).forEach(preset => {
-    //       const handle = preset.link.split('/').pop()
-    //       realTimePositionService.autoCrawl({ youtubeHandle: handle, channelTitle: preset.name })
-    //         .then(videoId => console.log(videoId))
-
-    //       // TODO: ffmpeg로 영상 다운로드 후 ffmpeg로 분석해서 포지션 업데이트하기
-    //     })
-    //   },
-    //   interval: 1000 * 10,
-    // })
     cron.run()
   },
 }

@@ -1,4 +1,6 @@
+import axios from 'axios'
 import helpers from '../core/helpers'
+import { log } from '../core/logger'
 import IContext from '../core/interfaces/context'
 import useService from '../services'
 import bitcoinQuotes from '../constants/bitcoin_quotes'
@@ -28,17 +30,49 @@ const contentController = {
         c.res.failed(e)
       }
     },
-    autoCapture: async (c: IContext) => {
+    desktopTargets: async (c: IContext) => {
       try {
-        const data = await service.content.realTimePosition.autoCapture({
-          channelUrl: c.req.body['channelUrl'],
-          prompt: c.req.body['prompt'],
-          frames: c.req.body['frames'],
-          interval: c.req.body['interval'],
-        })
-        c.res.asJSON(data)
+        c.res.asJSON(await service.content.realTimePosition.desktopTargets())
       } catch (e) {
         c.res.failed(e)
+      }
+    },
+    desktopReport: async (c: IContext) => {
+      try {
+        c.res.asJSON(await service.content.realTimePosition.desktopReport({
+          positionId: c.req.body['positionId'],
+          videoId: c.req.body['videoId'],
+          isLive: !!c.req.body['isLive'],
+          images: c.req.body['images'],
+        }))
+      } catch (e) {
+        c.res.failed(e)
+      }
+    },
+    // 슬랙 버튼 클릭. 슬랙은 3초 안의 응답을 요구하므로 먼저 200을 주고,
+    // 실제 반영과 메시지 갱신은 response_url로 이어서 한다.
+    slackInteraction: async (c: IContext) => {
+      c.res.success()
+
+      try {
+        const payload = JSON.parse(c.req.body['payload'])
+        const action = (payload.actions || [])[0]
+        if (!action) return
+
+        const { id, reportedAt } = JSON.parse(action.value)
+        const result = await service.content.realTimePosition.resolveReport({
+          id,
+          reportedAt,
+          approve: action.action_id === 'position_approve',
+        })
+
+        const who = ((payload.user || {}).name) || '누군가'
+        await axios.post(payload.response_url, {
+          replace_original: true,
+          text: `${result.message} — ${who}, ${helpers.dayjs().format('MM-DD HH:mm')}`,
+        })
+      } catch (e) {
+        log.error('slackInteraction failed:', e)
       }
     },
     changeNotification: {

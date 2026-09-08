@@ -1,5 +1,6 @@
 import fastify, { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import fastifyCors from '@fastify/cors'
+import fastifyFormbody from '@fastify/formbody'
 import useRoutes from './routes'
 import axios from 'axios'
 import store from './store'
@@ -99,6 +100,10 @@ const isAllowedOrigin = (origin: string) => {
 export const initApp = async (app: FastifyInstance) => {
   checkServerConfig()
 
+  // 슬랙 인터랙션은 application/x-www-form-urlencoded로 온다. fastify는 이 타입의
+  // 파서를 기본으로 갖고 있지 않아서, 없으면 415로 튕긴다.
+  app.register(fastifyFormbody)
+
   app.register(fastifyCors, {
     // @fastify/cors의 기본값은 'GET,HEAD,POST'라서 지정하지 않으면
     // 어드민 콘솔의 수정(PUT)/삭제(DELETE)가 preflight 단계에서 전부 막힌다.
@@ -143,6 +148,8 @@ export const initApp = async (app: FastifyInstance) => {
 
 export const app = fastify({
   trustProxy: true,
+  // capture_desktop이 보내는 프레임 3장이 base64로 부풀면 기본값 1MB를 넘긴다.
+  bodyLimit: 1024 * 1024 * 16,
   // fastify 5부터 라우터 옵션은 routerOptions 아래로 옮겨졌다. (최상위 지정은 fastify 6에서 제거됨)
   routerOptions: {
     ignoreTrailingSlash: true,
