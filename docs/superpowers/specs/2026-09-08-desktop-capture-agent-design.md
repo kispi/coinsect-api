@@ -264,9 +264,11 @@ fastify 기본 `bodyLimit`이 정확히 1MB이므로 **이 라우트에 한해 p
 
 슬랙 앱 설정은 `api.slack.com` 대시보드에서만 가능하다. MCP로도 코드로도 대신할 수 없다.
 
-1. **현재 `SLACK_COINSECT_API` 웹훅이 정식 슬랙 앱 소유인지 확인.**
-   레거시 "Incoming WebHooks" 커스텀 인테그레이션이면 **버튼이 아예 동작하지 않는다.**
-   그 경우 앱을 새로 만들고 웹훅을 재발급해야 한다. 착수 전에 이것부터 확인한다.
+1. **웹훅 소유 앱 확정.** `coinsect.io` 워크스페이스에는 `코인충 봇`(`A03F1G319EU`)과
+   `껄무새`(`A0AV5LXHGVC`)가 있고 **둘 다 `Modern` 타입임을 2026-09-08 확인했다.**
+   레거시 커스텀 인테그레이션이 아니므로 앱 신규 생성도 웹훅 재발급도 필요 없다.
+   `SLACK_COINSECT_API` 값이 어느 앱의 Incoming Webhook URL과 일치하는지만 대조해
+   Interactivity를 켤 앱을 정한다.
 2. 앱 설정 → **Interactivity & Shortcuts** 활성화, Request URL을
    `https://api.coinsect.io/slack/interactions`로 등록
 3. **Basic Information → App Credentials → Signing Secret** 을 `.env`의 `SLACK_SIGNING_SECRET`에
