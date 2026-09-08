@@ -5,6 +5,8 @@ import useCache from '../../core/cache'
 import presets from '../../constants/position_presets'
 import IContext from '../../core/interfaces/context'
 import positionReports, { positionHasChanged, IPositionReport } from './position_reports'
+import awsService from '../aws'
+import { log } from '../../core/logger'
 import chatService from '../chat'
 
 const now = () => helpers.dayjs().format()
@@ -269,7 +271,10 @@ const realTimePositionService = {
     }]
 
     const result = await genAI.models.generateContent({
-      model: 'gemini-flash-latest',
+      // 'gemini-flash-latest'는 떠다니는 별칭이라, 구글이 이걸 다음 티어로 옮기면 배포도
+      // 하지 않았는데 단가와 판독 성향이 함께 바뀐다. 2026-09-08에 4/4로 검증된 이 버전으로 고정한다.
+      // 더 싸게 가려면 gemini-3.5-flash-lite(입력 $0.30/M)로 바꾸면 된다.
+      model: 'gemini-3.8-flash',
       config: {
         responseMimeType: 'application/json',
       },
@@ -311,9 +316,11 @@ const realTimePositionService = {
 
     // 판정 계층은 아직 없다. 먼저 읽힌 프레임을 그대로 쓴다.
     let parsed = null
+    let usedFrame = null
     for (const base64 of images || []) {
       try {
         parsed = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg' }))
+        usedFrame = base64
         break
       } catch (e) { /* 프레임마다 가려지는 정도가 달라 실패는 흔하다. 다음 장을 본다. */ }
     }
@@ -328,6 +335,21 @@ const realTimePositionService = {
     const previous = await positionReports.find(positionId)
     if (previous && !positionHasChanged(previous, parsed)) return { isLive, reported: false, reason: '직전 제보와 동일' }
 
+    // 제보로 확정된 뒤에만 올린다. 억제된 판독까지 올리면 쓰이지 않을 파일이 쌓인다.
+    // 실패해도 제보 자체는 나가야 하므로 삼키고 진행한다. (이미지 없이 렌더된다)
+    let image = { imageUrl: undefined, imageKey: undefined }
+    try {
+      const imageKey = `real_time_positions/${helpers.crypto.generateUUID()}.jpg`
+      const imageUrl = await awsService.s3.putObject({
+        key: imageKey,
+        body: Buffer.from(usedFrame, 'base64'),
+        contentType: 'image/jpeg',
+      })
+      image = { imageUrl, imageKey }
+    } catch (e) {
+      log.error('desktopReport: 프레임 업로드 실패', e)
+    }
+
     await fileReport({
       id: positionId,
       lane: 'desktop',
@@ -338,6 +360,7 @@ const realTimePositionService = {
       entryPrice: parsed.entryPrice,
       liqPrice: parsed.liqPrice,
       size: parsed.size,
+      ...image,
       reportedAt: now(),
     })
 
@@ -347,6 +370,9 @@ const realTimePositionService = {
   resolveReport: async ({ id, reportedAt, approve }: { id: string, reportedAt: string, approve: boolean }) => {
     const report = await positionReports.find(id, reportedAt)
     if (!report) return { ok: false, message: '제보를 찾을 수 없습니다. (이미 처리됐거나 더 최신 제보가 있습니다)' }
+
+    // 메시지가 텍스트로 교체되면 이 이미지를 참조하는 곳이 없어진다.
+    if (report.imageKey) awsService.s3.deleteObject(report.imageKey).catch(e => log.error('제보 이미지 삭제 실패', e))
 
     if (!approve) {
       await positionReports.remove(id)

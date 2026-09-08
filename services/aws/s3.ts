@@ -54,6 +54,18 @@ const s3Service = {
       return Promise.reject(e)
     }
   },
+  // 브라우저가 올리는 경로(getSignedUrl)와 달리, 서버가 이미 손에 쥔 바이트를 바로 올린다.
+  // 슬랙이 image 블록을 렌더하려면 공개로 읽히는 URL이어야 해서 public-read로 둔다.
+  putObject: async ({ key, body, contentType }: { key: string, body: Buffer, contentType: string }) => {
+    await s3.send(new PutObjectCommand({
+      Bucket,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+      ACL: 'public-read',
+    }))
+    return host + key
+  },
   deleteObject: (Key: string) => s3.send(new DeleteObjectCommand({
     Bucket,
     Key,

@@ -18,6 +18,9 @@ export type IPositionReport = {
   size?: number
   onAir?: boolean
   ip?: string
+  // 판독에 실제로 쓰인 프레임. 승인자가 'AI가 무엇을 봤는지'를 슬랙에서 바로 본다.
+  imageUrl?: string
+  imageKey?: string
   reportedAt: string
 }
 
@@ -81,7 +84,11 @@ const positionReports = {
     return slackService.postMessage({
       channel: 'coinsect-api',
       text: `[${report.name}] 포지션 수정 제보`,
-      blocks: [{
+      blocks: [...(report.imageUrl ? [{
+        type: 'image',
+        image_url: report.imageUrl,
+        alt_text: `${report.name} 방송 캡처`,
+      }] : []), {
         type: 'section',
         text: {
           type: 'mrkdwn',
