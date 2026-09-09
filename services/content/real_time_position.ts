@@ -155,7 +155,6 @@ const setRealTimePositions = async o => {
 const realTimePositionService = {
   presets: () => presets,
   changeNotification: {
-    delete: (id: string) => positionReports.remove(id),
     all: () => positionReports.all(),
     // 유저가 화면을 보고 직접 고쳐 보내는 제보. 포지션 하나만 다룬다 - 유저는 모달에서
     // 계약 하나를 골라 수정한다.
