@@ -39,11 +39,14 @@ const s3Service = {
       key.split('/').filter(frag => frag).slice(0, -1).join('/') + '/' + helpers.crypto.generateUUID() + '_' + fileName
 
     try {
+      // ACL은 주지 않는다. 버킷에 Block Public Access의 BlockPublicAcls가 켜져 있어
+      // 서명에 x-amz-acl=public-read가 박히면 브라우저의 PUT이 403으로 막힌다.
+      // (putObject도 2026-09-09에 같은 이유로 걷어냈다)
+      // 공개 읽기는 ACL이 아니라 CloudFront가 담당하고, 업로드한 쪽은 CDN URL을 쓴다.
       const url = await getSignedUrl(s3, new PutObjectCommand({
         Bucket,
         Key,
         ContentType: 'image/png;image/jpeg;image/jpg;image/gif;image/svg+xml',
-        ACL: 'public-read',
         Tagging: tagging || undefined,
       }), { expiresIn: 60 * 1 })
       const resp = { url, headers: {} }
