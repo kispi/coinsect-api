@@ -2,6 +2,7 @@ import useCache from '../../core/cache'
 import helpers from '../../core/helpers'
 import slackService from '../slack'
 import { IPosition, hasUsableValues, notional, sortByNotional } from './position_model'
+import { IModelUsage, describeUsage } from './model_usage'
 
 const cache = useCache()
 
@@ -22,6 +23,8 @@ export type IPositionReport = {
   // canonical에는 있지만 이 화면에서는 못 본 계약. 승인하면 지운다. 제보 시점에 계산해
   // 저장한다 - 슬랙 메시지로 사람에게 보여준 그 목록이 그대로 적용되어야 한다.
   unseen?: string[]
+  // 이 제보를 만드는 데 쓴 모델과 토큰, 그리고 비용.
+  usage?: IModelUsage
   // 판독에 실제로 쓰인 프레임. 승인자가 'AI가 무엇을 봤는지'를 슬랙에서 바로 본다.
   imageUrl?: string
   imageKey?: string
@@ -90,6 +93,12 @@ const read = async (): Promise<IInbox> => {
 }
 
 const write = (inbox: IInbox) => cache.set(KEY, inbox)
+
+// 무엇으로 읽었고 얼마 들었는지. 사람 제보(모델을 쓰지 않는다)에는 붙지 않는다.
+const usageLine = (report: IPositionReport) => {
+  const described = describeUsage(report.usage)
+  return described ? `:brain: ${described}` : ''
+}
 
 // 판독에 쓰인 프레임. 승인자가 방송을 켜지 않고도 화면을 대조할 수 있어야 한다.
 const imageBlocks = (report: IPositionReport) => (report.imageUrl ? [{
@@ -183,6 +192,7 @@ const positionReports = {
               :question: ${title} 화면에서 포지션을 읽지 못했습니다
               스샷을 보고 <${ADMIN_URL}|어드민>에서 직접 넣어주세요.
               요청자: ${report.requester}${report.ip ? ` (${report.ip})` : ''}
+              ${usageLine(report)}
             `),
           },
         }, {
@@ -217,6 +227,7 @@ const positionReports = {
             화면과 일치하는 것만 남기고 승인하세요.
             요청자: ${report.requester}${report.ip ? ` (${report.ip})` : ''}
             ${(report.unseen || []).length ? `:wastebasket: 화면에 없어 지울 포지션: ${report.unseen.join(', ')}` : ''}
+            ${usageLine(report)}
             <${ADMIN_URL}|어드민에서 직접 수정>${truncated > 0 ? `\n포지션이 많아 명목가 상위 ${SLACK_OPTION_LIMIT}개만 실었습니다 (${truncated}개 생략).` : ''}
           `),
         },
@@ -286,8 +297,11 @@ const positionReports = {
       ? applied.map(positionReports.positionLine).join(' / ')
       : '판독 불가'
 
+    const described = describeUsage(report.usage)
+
     return `${approve ? '✅' : '❌'} ${message} — ${LANE_ICON[report.lane]} ${title}`
       + ` · ${detail} · ${who} · ${when}`
+      + (described ? ` · ${described}` : '')
   },
 }
 

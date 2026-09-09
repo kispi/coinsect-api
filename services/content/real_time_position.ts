@@ -16,6 +16,7 @@ import {
   unseenContracts,
   upsertPositions,
 } from './position_model'
+import { IModelUsage, addUsage, emptyUsage, mergeUsage } from './model_usage'
 import awsService from '../aws'
 import { log } from '../../core/logger'
 import chatService from '../chat'
@@ -38,6 +39,10 @@ export { pickPosition }
 // 벤치(tools/bench_position_models.ts)가 이 상수를 그대로 import해 쓴다. 프롬프트를 한 곳에서만
 // 관리해야 '벤치에서 이긴 설정'과 '운영이 실제로 쓰는 설정'이 어긋나지 않는다. 2026-09-09에
 // 벤치가 프롬프트를 복사해 갖고 있다가 실제와 다른 결과를 내는 일을 겪었다.
+// 'gemini-flash-latest'는 떠다니는 별칭이라, 구글이 이걸 다음 티어로 옮기면 배포도
+// 하지 않았는데 단가와 판독 성향이 함께 바뀐다. 버전을 고정한다.
+export const POSITION_MODEL = 'gemini-3.8-flash'
+
 export const POSITION_PROMPT = `
   You are reading a crypto futures trading screen captured from a livestream.
 
@@ -349,15 +354,12 @@ const realTimePositionService = {
     }]
 
     const result = await genAI.models.generateContent({
-      // 'gemini-flash-latest'는 떠다니는 별칭이라, 구글이 이걸 다음 티어로 옮기면 배포도
-      // 하지 않았는데 단가와 판독 성향이 함께 바뀐다. 버전을 고정한다.
-      //
       // 2026-09-09에 gemini-3.5-flash-lite(월 $28 → $4)로 내리려다 접었다. 이 프롬프트로
       // 재보니 BTC 화면은 읽는데 알트코인 화면(SOXL 픽스처)은 9회 중 0회, 전부
       // legible=false로 넘긴다. 방송인들이 실제로 만지는 게 알트코인이라
       // (2026-09-09 박호두 KORUUSDT) 비용을 아끼는 게 아니라 자동화를 수동 입력으로
       // 바꾸는 셈이 된다. 같은 조건에서 이 모델은 9/9로 읽는다.
-      model: 'gemini-3.8-flash',
+      model: POSITION_MODEL,
       config: {
         responseMimeType: 'application/json',
         // 주지 않으면 이 모델은 호출당 2,600토큰씩 생각하고, 그게 출력 단가로 과금된다.
@@ -377,7 +379,9 @@ const realTimePositionService = {
 
     // 어드민 화면과 desktopReport가 둘 다 평탄한 네 필드를 읽는다. 대표 포지션을 그 자리에
     // 두고, 무엇을 두고 골랐는지는 positions에 남긴다.
+    // usage는 이 한 번의 호출분이다. 프레임을 여러 장 보면 부르는 쪽에서 누계한다.
     return JSON.stringify({
+      usage: addUsage(emptyUsage(POSITION_MODEL), result.usageMetadata),
       legible: !!picked,
       contract: picked ? picked.contract : null,
       entryPrice: picked ? picked.entryPrice : null,
@@ -423,10 +427,15 @@ const realTimePositionService = {
     // 어드민에서 직접 넣으면 되므로, 조용히 버리는 것보다 알리는 편이 낫다.
     let positions: IPosition[] = null
     let usedFrame = null
+    // 프레임을 여러 장 보면 호출도 여러 번이라 비용이 곱해진다. 이 제보가 실제로 얼마
+    // 들었는지 알아야 하므로 시도한 것을 전부 누계한다.
+    let usage = emptyUsage(POSITION_MODEL)
+
     for (const base64 of images || []) {
       let candidate = null
       try {
         candidate = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg' }))
+        usage = mergeUsage(usage, candidate.usage)
       } catch (e) { continue /* JSON이 깨진 응답. 다음 장을 본다. */ }
 
       // 못 읽었을 때 모델이 내주는 contract는 'SOXLUSDT Perp'처럼 매번 흔들린다. 그대로
@@ -436,9 +445,9 @@ const realTimePositionService = {
       usedFrame = base64
       if (positions.length) break
     }
-    if (!usedFrame) return { isLive, reported: false, reason: '화면에서 포지션을 찾지 못함' }
+    if (!usedFrame) return { isLive, reported: false, reason: '화면에서 포지션을 찾지 못함', usage }
 
-    if (!positionSetHasChanged(found.positions, positions)) return { isLive, reported: false, reason: '기존 포지션과 동일' }
+    if (!positionSetHasChanged(found.positions, positions)) return { isLive, reported: false, reason: '기존 포지션과 동일', usage }
 
     // 관리자가 승인하지 않고 두면 canonical은 계속 낡은 값이라, 위 비교만으로는
     // 같은 알림이 주기마다 영원히 온다. 직전 제보와도 달라야 다시 알린다.
@@ -446,7 +455,7 @@ const realTimePositionService = {
     // 슬랙 메시지의 버튼이 죽기 때문이다.
     const previous = await positionReports.find(positionId)
     if (previous && !positionSetHasChanged(previous.positions, positions)) {
-      return { isLive, reported: false, reason: '직전 제보와 동일' }
+      return { isLive, reported: false, reason: '직전 제보와 동일', usage }
     }
 
     // 화면에서 사라진 계약. 방송인이 닫은 것으로 보고 정리한다.
@@ -464,6 +473,8 @@ const realTimePositionService = {
       // 지금 계산해 담아두는 이유는, 슬랙 메시지로 사람에게 보여준 목록이 그대로
       // 적용되어야 하기 때문이다.
       unseen,
+      // 이 제보가 실제로 얼마 들었는지. 슬랙 메시지에 한 줄로 붙는다.
+      usage,
       reportedAt: now(),
     }
 
@@ -475,7 +486,7 @@ const realTimePositionService = {
       await positionReports.notifyAutoApproved(report, positions)
       log.info(`desktopReport: 자동승인 ${found.name} — ${positions.map(o => o.contract).join(', ')}`)
 
-      return { isLive, reported: true, autoApproved: true, positions }
+      return { isLive, reported: true, autoApproved: true, positions, usage }
     }
 
     // 제보로 확정된 뒤에만 올린다. 억제된 판독까지 올리면 쓰이지 않을 파일이 쌓인다.
@@ -494,7 +505,7 @@ const realTimePositionService = {
 
     await positionReports.file(report)
 
-    return { isLive, reported: true, autoApproved: false, positions }
+    return { isLive, reported: true, autoApproved: false, positions, usage }
   },
   // 슬랙 버튼에서 온 승인/거절을 적용한다. 누가 언제 눌렀는지는 슬랙 페이로드에서만
   // 알 수 있어 컨트롤러가 넘겨주고, 기록 문구는 여기서 완성해 돌려준다.

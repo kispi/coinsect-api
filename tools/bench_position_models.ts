@@ -12,6 +12,7 @@ import {
   POSITION_SCHEMA_PROMPT,
   pickPosition,
 } from '../services/content/real_time_position'
+import { costOf } from '../services/content/model_usage'
 
 const KEY = process.env.GOOGLE_AI_STUDIO
 const DIR = path.join(__dirname, '..', 'docs/superpowers/specs/fixtures')
@@ -46,13 +47,6 @@ const MODELS = (process.env.BENCH_MODELS
 // 10/12를 오간 적이 있다. 판단이 갈리는 후보끼리 비교할 때는 REPS를 올려서 볼 것.
 const REPS = parseInt(process.env.REPS) || 1
 
-// 호출당 단가 (USD / 1M 토큰). 2026-09-09 ai.google.dev/gemini-api/docs/pricing.
-const PRICE = {
-  'gemini-3.8-flash': { in: 0.75, out: 3.75 },
-  'gemini-3.5-flash': { in: 1.50, out: 9.00 },
-  'gemini-3.5-flash-lite': { in: 0.30, out: 2.50 },
-  'gemini-2.5-flash-lite': { in: 0.10, out: 0.40 },
-}
 
 // 하루 90바퀴(피크 6시간 x 5분 + 비피크 18시간 x 1시간)에 피크 3명 / 비피크 1명 라이브 가정.
 const CALLS_PER_MONTH = (72 * 3 + 18 * 1) * 30
@@ -153,8 +147,10 @@ const run = async () => {
 
   console.log(`\n=== 종합 (${THINKING_OFF ? 'thinkingConfig 없음 = 운영 현행' : THINKING_LEVEL ? `thinkingLevel=${THINKING_LEVEL}` : `thinkingBudget=${THINKING_BUDGET}`}) ===`)
   for (const [m, t] of Object.entries(totals) as [string, any][]) {
+    // 출력 단가로 과금되는 토큰은 출력 + thinking이다. 표시용.
     const billedOut = t.outTok + t.thoughtTok
-    const perCall = (t.inTok / t.calls / 1e6) * PRICE[m].in + (billedOut / t.calls / 1e6) * PRICE[m].out
+    // 운영과 같은 단가표를 쓴다. 따로 들고 있으면 한쪽만 갱신되어 비용 판단이 갈린다.
+    const perCall = costOf(m, t.inTok / t.calls, t.outTok / t.calls, t.thoughtTok / t.calls)
     console.log(
       `${m.padEnd(24)} ${t.ok}/${t.max}  판독불가 ${t.unreadable}/${t.calls}  평균 ${Math.round(t.ms / t.calls)}ms  ` +
       `호출당 $${perCall.toFixed(5)}  월 $${(perCall * CALLS_PER_MONTH).toFixed(2)}` +
