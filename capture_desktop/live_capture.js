@@ -35,7 +35,11 @@ const resolveLiveStream = async channelUrl => {
     const result = await execFileAsync(YT_DLP, [
       '--no-warnings',
       '--no-playlist',
-      '-f', 'best[height<=1080]',
+      // 'best'는 영상과 소리가 합쳐진(muxed) 포맷만 고른다. 유튜브가 어떤 player_client로
+      // 응답하느냐에 따라 라이브가 video-only/audio-only만 내주는 경우가 있고, 그때는
+      // 'Requested format is not available'로 죽는다. 우리는 프레임만 필요하므로
+      // 소리 없는 영상으로 떨어지게 폴백을 둔다. 대역폭도 이쪽이 덜 든다.
+      '-f', 'best[height<=1080]/bv*[height<=1080]/best/bv*',
       '--print', '%(id)s',
       '--print', '%(is_live)s',
       '--print', 'urls',
