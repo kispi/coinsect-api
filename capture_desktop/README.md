@@ -23,8 +23,6 @@
 cp .env.sample .env   # DESKTOP_SECRET을 서버 .env와 같은 값으로 채운다
 ```
 
-의존성 설치는 없다. `npm install`도 필요 없다.
-
 ### 켜두는 용도 (출근용)
 
 ```bash
