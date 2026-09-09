@@ -88,7 +88,15 @@ const contentController = {
       }
     },
     changeNotification: {
-      all: (c: IContext) => c.res.asJSON(service.content.realTimePosition.changeNotification.all()),
+      // 제보함이 Redis로 옮겨가며 all()이 async가 됐다. await 없이 넘기면 fastify가
+      // Promise를 그대로 {}로 직렬화해, 어드민이 배열인 줄 알고 filter를 부르다 죽는다.
+      all: async (c: IContext) => {
+        try {
+          c.res.asJSON(await service.content.realTimePosition.changeNotification.all())
+        } catch (e) {
+          c.res.failed(e)
+        }
+      },
       create: async (c: IContext) => {
         try {
           c.res.success(await service.content.realTimePosition.changeNotification.create(c))
