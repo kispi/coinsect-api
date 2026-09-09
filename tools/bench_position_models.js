@@ -42,6 +42,13 @@ const CASES = [
 
 const MODELS = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash-lite']
 
+// Gemini 3.x는 기본으로 thinking을 돌아 호출당 수십 초가 걸린다. 2026-09-08 실행이
+// 요약 헤더까지만 찍히고 멈춘 것이 이 때문이다. 0으로 끄고 잰다.
+// 주의: 운영(services/content/real_time_position.ts의 autoParse)은 이 값을 주지 않아
+// thinking이 켜진 상태로 돈다. 여기서 이긴 모델로 갈아탈 때 이 설정도 같이 옮겨야
+// 측정한 정확도와 비용이 실제와 맞는다. THINKING_BUDGET=-1로 주면 켜고 잴 수 있다.
+const THINKING_BUDGET = Number.isFinite(parseInt(process.env.THINKING_BUDGET)) ? parseInt(process.env.THINKING_BUDGET) : 0
+
 const near = (a, b, pct) => a != null && b != null && Math.abs(a - b) / Math.abs(b) <= pct
 
 const score = (got, truth) => {
@@ -64,7 +71,7 @@ const run = async () => {
   const totals = {}
 
   for (const model of MODELS) {
-    totals[model] = { ok: 0, max: 0, ms: 0 }
+    totals[model] = { ok: 0, max: 0, ms: 0, inTok: 0, outTok: 0, thoughtTok: 0 }
     console.log(`\n=== ${model} ===`)
 
     for (const c of CASES) {
@@ -72,10 +79,14 @@ const run = async () => {
       const t0 = Date.now()
       let got = null
       let err = ''
+      let usage = {}
       try {
         const res = await genAI.models.generateContent({
           model,
-          config: { responseMimeType: 'application/json' },
+          config: {
+            responseMimeType: 'application/json',
+            thinkingConfig: { thinkingBudget: THINKING_BUDGET },
+          },
           contents: [
             { text: PROMPT },
             { text: SCHEMA_PROMPT },
@@ -83,25 +94,41 @@ const run = async () => {
           ],
         })
         got = JSON.parse(res.text)
+        usage = res.usageMetadata || {}
       } catch (e) {
         err = (e.message || String(e)).slice(0, 80)
       }
       const ms = Date.now() - t0
       const s = score(got, c.truth)
+      // thoughtsTokenCount는 candidatesTokenCount에 포함되지 않고 별도로 오지만
+      // 과금은 출력 토큰 단가로 매겨진다. 빼고 세면 비용이 실제보다 싸게 나온다.
+      const thoughtTok = usage.thoughtsTokenCount || 0
       totals[model].ok += s.ok
       totals[model].max += 4
       totals[model].ms += ms
+      totals[model].inTok += usage.promptTokenCount || 0
+      totals[model].outTok += usage.candidatesTokenCount || 0
+      totals[model].thoughtTok += thoughtTok
 
       console.log(`${c.file.padEnd(24)} ${String(s.ok)}/4  ${s.detail}${err ? ' ' + err : ''}`)
       if (got) console.log(`${''.padEnd(24)} → ${got.contract} / ${got.size} / ${got.entryPrice} / ${got.liqPrice}`)
       console.log(`${''.padEnd(24)}   정답: ${c.truth.contract} / ${c.truth.size} / ${c.truth.entryPrice} / ${c.truth.liqPrice}  (${ms}ms)`)
+      console.log(`${''.padEnd(24)}   토큰: 입력 ${usage.promptTokenCount || 0} / 출력 ${usage.candidatesTokenCount || 0} / thinking ${thoughtTok}`)
     }
   }
 
-  console.log('\n=== 종합 ===')
+  console.log(`\n=== 종합 (thinkingBudget=${THINKING_BUDGET}) ===`)
   for (const [m, t] of Object.entries(totals)) {
-    console.log(`${m.padEnd(24)} ${t.ok}/${t.max}  평균 ${Math.round(t.ms / CASES.length)}ms`)
+    // 출력 단가로 과금되는 토큰은 출력 + thinking이다. 이 합에 모델별 출력 단가를,
+    // 입력 토큰에 입력 단가를 곱해야 호출당 비용이 나온다.
+    const billedOut = t.outTok + t.thoughtTok
+    console.log(
+      `${m.padEnd(24)} ${t.ok}/${t.max}  평균 ${Math.round(t.ms / CASES.length)}ms  ` +
+      `호출당 입력 ${Math.round(t.inTok / CASES.length)}tok / 과금출력 ${Math.round(billedOut / CASES.length)}tok` +
+      `${t.thoughtTok ? ` (thinking ${Math.round(t.thoughtTok / CASES.length)}tok 포함)` : ''}`,
+    )
   }
+  console.log(`\n케이스 ${CASES.length}건 x 모델 ${MODELS.length}개. 월 비용은 호출당 토큰 x 일 호출수 x 단가로 계산할 것.`)
 }
 
 run().catch(e => { console.error(e); process.exit(1) })
@@ -112,7 +139,6 @@ run().catch(e => { console.error(e); process.exit(1) })
 // 주의: 출력을 파일로 리다이렉트하면 Node가 stdout을 버퍼링해서 진행 상황이 안 보인다.
 // 터미널에 그대로 띄우거나, 필요하면 process.stdout.write 대신 fs.appendFileSync를 쓴다.
 //
-// 미완: 2026-09-08 실행에서 요약 헤더까지만 찍히고 멈췄다. Gemini 3.x가 기본으로 thinking을
-// 돌아 호출당 수십 초가 걸리는 것으로 보인다. thinkingConfig: { thinkingBudget: 0 }을 주고
-// 다시 재볼 것. usageMetadata.thoughtsTokenCount가 출력 토큰으로 과금되므로 비용 추정에
-// 반드시 포함해야 한다.
+// thinking은 기본으로 끄고(thinkingBudget=0) 재며, 켜고 비교하려면 THINKING_BUDGET=-1을 준다.
+// 호출당 입력/과금출력 토큰을 찍어주므로, 모델별 단가만 곱하면 월 비용이 나온다.
+// thoughtsTokenCount는 출력 단가로 과금되므로 과금출력에 합산해 센다.
