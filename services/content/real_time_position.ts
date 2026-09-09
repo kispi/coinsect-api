@@ -11,6 +11,14 @@ import chatService from '../chat'
 
 const now = () => helpers.dayjs().format()
 
+// 화면에서 읽어낸 포지션 한 건. canonical(IRealTimePosition)의 부분집합이다.
+type IPositionValues = {
+  contract?: string
+  entryPrice?: number
+  liqPrice?: number
+  size?: number
+}
+
 type IRealTimePosition = {
   id: string
   name: string
@@ -27,6 +35,66 @@ type IRealTimePosition = {
 }
 
 const cache = useCache()
+
+// 벤치(tools/bench_position_models.ts)가 이 상수를 그대로 import해 쓴다. 프롬프트를 한 곳에서만
+// 관리해야 '벤치에서 이긴 설정'과 '운영이 실제로 쓰는 설정'이 어긋나지 않는다. 2026-09-09에
+// 벤치가 프롬프트를 복사해 갖고 있다가 실제와 다른 결과를 내는 일을 겪었다.
+export const POSITION_PROMPT = `
+  You are reading a crypto futures trading screen captured from a livestream.
+
+  Ignore the orderbook and the chart. The position information is usually near the bottom of the image.
+
+  For each open position, read:
+  - 'contract': the trading pair, usually ending in USDT (e.g. BTCUSDT, ETHUSDT, SOLUSDT).
+    Any coin is possible, not just Bitcoin. If it is not written next to the position, look for it
+    in nearby labels or the window title.
+  - 'entryPrice': the price the position was opened at. Look for 'Open Price', 'Entry Price' or a
+    similar label. Do not compute it from position value divided by size.
+  - 'liqPrice': the liquidation price, usually labeled 'Liq' or 'Liquidation Price'.
+  - 'size': how many coins are held. Positive for a long, negative for a short. A long usually has
+    liqPrice below entryPrice; a short usually has liqPrice above it.
+
+  Scale varies enormously by coin. A position may be 0.5 coins or 16,570 coins, and a price may be
+  $0.0001 or $95,000. Never doubt or reject a value because it looks too large or too small.
+
+  Commas are thousand separators: "56,829.50" is the number 56829.5. Return numbers, not strings.
+  Report the coin amount, not the total value in USDT.
+
+  The screen may show several positions at once (BTC, ETH, SOL, ...). Return every position you can
+  read as a separate entry. Do not merge them and do not pick one yourself.
+`
+
+export const POSITION_SCHEMA_PROMPT = `
+  Fill this JSON using the given image.
+
+  Set "legible" to false ONLY when no position is visible at all, or every position is covered or cut
+  off so the digits cannot be read. If you can read at least one position, set it to true. Do not use
+  false merely because you are unsure -- being unsure is normal, guessing at digits you cannot see is not.
+
+  {
+    "legible": boolean,
+    "positions": [
+      { "contract": string, "entryPrice": number, "liqPrice": number, "size": number }
+    ]
+  }
+`
+
+// 한 화면에 BTC/ETH/SOL이 동시에 잡혀 있는 경우가 있다. canonical은 스트리머당 포지션 하나라
+// 대표를 골라야 하는데, 코인 개수는 코인마다 자릿수가 달라(0.5 BTC vs 16,570 KORU) 그대로
+// 비교할 수 없다. 명목가(|수량| x 진입가)로 '가장 크게 건 포지션'을 고른다.
+// 순위를 못 매기면 고르지 않는다. 사람이 스샷을 보고 판단하는 편이 낫다.
+export const pickPosition = (positions): IPositionValues => {
+  const usable = (positions || []).filter(p => p && hasUsableValues(p))
+  if (!usable.length) return null
+  if (usable.length === 1) return usable[0]
+
+  const notional = p => Math.abs(parseFloat(p.size)) * Math.abs(parseFloat(p.entryPrice))
+  const ranked = [...usable].sort((a, b) => notional(b) - notional(a))
+
+  // 1등과 2등이 같으면 어느 쪽이 대표인지 정할 근거가 없다.
+  if (notional(ranked[0]) === notional(ranked[1])) return null
+  return ranked[0]
+}
 
 const createPosition = ({
   image,
@@ -230,38 +298,9 @@ const realTimePositionService = {
     const genAI = new GoogleGenAI({ apiKey: store.state.serverConfig.GOOGLE_AI_STUDIO })
 
     const contents = [{
-      text: (prompt || '').trim() || `
-        Ignore the orderbook. The relevant information is usually located near the bottom-left corner of the image.
-
-        - 'entryPrice' is the initial price at which the position was entered. Look for 'Open Price', 'Entry Price' or similar labels. Don't assume that entry price = position value / size.
-        - 'liqPrice' refers to the liquidation price, which is typically labeled as 'Liq' or 'Liquidation Price'.
-        - 'size' indicates the position size. Positive for long position, usually where liqPrice is lower than entryPrice. Negative for short position, usually where liqPrice is higher than entryPrice. Usually ranges between 1 and 100 BTC. (not always, so make your own guess.)
-        - 'contract' is the trading pair and usually ends with 'USDT' (e.g., 'BTCUSDT', 'ETHUSDT'). It can also be any altcoin-USDT pair. If the contract is not explicitly mentioned, look for it in labels near the position information or default to 'BTCUSDT'.
-
-        Make sure entryPrice, liqPrice, and size are all numbers, not string representations of numbers.
-
-        Ignore the total value of the position, I just need how many coins are being longed or shorted.
-        Bitcoin is currently at 5 figures, so if you see something like "56,829.50", it's a number 56829.5 (Make sure to ignore all commas)
-
-        I wish you can check all the values correctly like human can do even without hinting labels.
-      `,
+      text: (prompt || '').trim() || POSITION_PROMPT,
     }, {
-      text: `
-        Fill this JSON using the given image.
-
-        Set "legible" to false ONLY when the position overlay is absent, fully covered, or cut off so
-        the digits cannot be seen at all, and leave the numbers null in that case. If you can see the
-        digits, read them and set "legible" to true. Do not use false merely because you are unsure --
-        being unsure is normal, guessing at digits you cannot see is not.
-
-        {
-          "legible": boolean,
-          "entryPrice": number,
-          "liqPrice": number,
-          "size": number,
-          "contract": string 
-        }
-      `
+      text: POSITION_SCHEMA_PROMPT,
     }, {
       inlineData: {
         mimeType: mimeType || 'image/png',
@@ -284,7 +323,22 @@ const realTimePositionService = {
       },
       contents,
     })
-    return result.text
+
+    const parsed = JSON.parse(result.text)
+    // 어드민이 커스텀 프롬프트를 넣으면 positions 배열이 없다. 예전 모양 그대로 받아들인다.
+    const positions = Array.isArray(parsed.positions) ? parsed.positions : [parsed]
+    const picked = parsed.legible === false ? null : pickPosition(positions)
+
+    // 어드민 화면과 desktopReport가 둘 다 평탄한 네 필드를 읽는다. 대표 포지션을 그 자리에
+    // 두고, 무엇을 두고 골랐는지는 positions에 남긴다.
+    return JSON.stringify({
+      legible: !!picked,
+      contract: picked ? picked.contract : null,
+      entryPrice: picked ? picked.entryPrice : null,
+      liqPrice: picked ? picked.liqPrice : null,
+      size: picked ? picked.size : null,
+      positions,
+    })
   },
   // 집에서 도는 capture_desktop이 캡처 대상을 물어본다.
   desktopTargets: async () => {

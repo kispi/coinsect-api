@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import realTimePositionService from '../services/content/real_time_position'
+import realTimePositionService, { pickPosition } from '../services/content/real_time_position'
 import positionReports, { hasUsableValues, IPositionReport } from '../services/content/position_reports'
 
 const report = (o: Partial<IPositionReport>): IPositionReport => ({
@@ -61,4 +61,33 @@ test('resolutionText: 판독 불가 제보는 수치 자리에 판독 불가라�
   })
 
   assert.equal(text, '❌ 닫힘 — 🖥 *박호두* · 판독 불가 · <@U1> · 09-09 11:00')
+})
+
+const pos = (contract: string, size: number, entryPrice: number) =>
+  ({ contract, size, entryPrice, liqPrice: entryPrice * 0.9 })
+
+test('pickPosition: 여러 포지션이면 명목가가 가장 큰 것을 대표로 뽑는다', () => {
+  // 코인 개수로 재면 KORU(16,570개)가 이기지만, 실제로 크게 건 쪽은 BTC다.
+  const btc = pos('BTCUSDT', 8.478, 64919.5)   // 약 $550,000
+  const koru = pos('KORUUSDT', 16570, 24.36)   // 약 $403,000
+  const sol = pos('SOLUSDT', 100, 150)         // 약 $15,000
+
+  assert.equal(pickPosition([koru, btc, sol]).contract, 'BTCUSDT')
+  assert.equal(pickPosition([sol, koru]).contract, 'KORUUSDT')
+})
+
+test('pickPosition: 하나뿐이거나 읽을 게 없으면 그대로 판단한다', () => {
+  const btc = pos('BTCUSDT', 8.478, 64919.5)
+
+  assert.equal(pickPosition([btc]).contract, 'BTCUSDT')
+  assert.equal(pickPosition([]), null)
+  assert.equal(pickPosition(null), null)
+  // 수치가 빈 항목은 후보가 아니다.
+  assert.equal(pickPosition([{ contract: 'BTCUSDT', size: null, entryPrice: null, liqPrice: null }]), null)
+  assert.equal(pickPosition([{ contract: 'ETHUSDT', size: 3, entryPrice: 2000, liqPrice: 1800 }, { contract: 'X' }]).contract, 'ETHUSDT')
+})
+
+test('pickPosition: 순위를 못 매기면 고르지 않고 사람에게 넘긴다', () => {
+  // 명목가가 같으면 어느 쪽이 대표인지 정할 근거가 없다. 판독 불가로 폴백한다.
+  assert.equal(pickPosition([pos('BTCUSDT', 2, 1000), pos('ETHUSDT', 4, 500)]), null)
 })
