@@ -15,8 +15,13 @@ export type IPosition = {
 export type IStreamer = {
   id: string
   name: string
-  link: string
+  // 방송인은 채널 핸들이 유일한 출처다. 방송 URL은 따로 두지 않는다 - 방송을 껐다 켜면
+  // 바뀌는 값이라 갱신을 쫓아다녀야 했고, 이제 핸들에 /live를 붙이면 그 순간의 방송으로
+  // 유튜브가 보내준다(방송 중이 아니면 채널 페이지로 떨어진다).
   channelUrl: string
+  // 방송인이 아닌 항목(사토시, 테슬라, 엘살바도르 등)의 출처 링크. 근거 기사나 트래커라
+  // 채널 개념이 없다. 둘은 성격이 다르므로 이름을 나눈다.
+  sourceUrl?: string
   image: string
   onAir: boolean
   editable: boolean
@@ -47,6 +52,14 @@ export const positionSetHasChanged = (a: IPosition[], b: IPosition[]) => {
   const [x, y] = [byContract(a), byContract(b)]
   if (x.length !== y.length) return true
   return x.some((position, i) => positionHasChanged(position, y[i]))
+}
+
+// 카드에서 이름을 눌렀을 때 갈 곳. 방송인은 지금 방송(핸들 + /live), 그 외는 출처 링크다.
+export const watchUrl = (streamer: { channelUrl?: string, sourceUrl?: string }) => {
+  const channel = (streamer.channelUrl || '').trim().replace(/\/live\/?$/, '')
+  if (channel) return `${channel}/live`
+
+  return streamer.sourceUrl || null
 }
 
 // 명목가. 코인 개수는 코인마다 자릿수가 달라(0.5 BTC vs 16,570 KORU) 그대로 비교할 수 없다.
@@ -102,6 +115,15 @@ export const upsertPositions = (
   return next
 }
 
+// 2026-09-09 이전 저장분에는 link가 있다. 방송인의 link는 '그 순간의 방송' 주소라
+// 버려도 되지만(핸들로 다시 만든다), 방송인이 아닌 항목의 link는 출처라 살려야 한다.
+const migrateLink = (streamer) => {
+  if (!streamer || !('link' in streamer)) return streamer
+
+  const { link, ...rest } = streamer
+  return rest.channelUrl ? rest : { ...rest, sourceUrl: rest.sourceUrl || link }
+}
+
 // 화면을 성공적으로 읽었다면, 그 화면에 없던 계약은 방송인이 닫은 것이다. 그대로 두면
 // 유령 포지션이 영원히 쌓이고, 명목가가 크면 대표 자리까지 차지해 실제 포지션을 가린다.
 // 2026-09-09에 박호두의 BTCUSDT($4.6M)가 ZEC/VVV를 가려 이걸 밟았다.
@@ -123,13 +145,13 @@ export const unseenContracts = (current: IPosition[], read: IPosition[]) => {
 // 레디스는 옛 모양이다) 새 uuid를 뽑으면 GET 두 번이 같은 포지션에 다른 id를 준다.
 // 프론트의 v-for 키가 매번 갈려 5분마다 목록이 통째로 다시 그려진다.
 export const toStreamer = (stored): IStreamer => {
-  if (Array.isArray((stored || {}).positions)) return stored
+  if (Array.isArray((stored || {}).positions)) return migrateLink(stored)
 
   const { contract, entryPrice, liqPrice, size, ...streamer } = stored || {}
   const legacy = { contract, entryPrice, liqPrice, size }
 
   return {
-    ...streamer,
+    ...migrateLink(streamer),
     // 계약만 있고 수치가 비어 있던 자리(프리셋 기본값)는 포지션으로 세지 않는다.
     positions: hasUsableValues(legacy) ? [{ id: `${streamer.id}-${contract}`, ...legacy }] : [],
   }

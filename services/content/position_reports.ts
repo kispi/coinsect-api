@@ -13,7 +13,8 @@ export type IPositionReport = {
   lane: 'desktop' | 'human'
   requester: string
   name?: string
-  link?: string
+  // 슬랙에서 이름을 눌렀을 때 갈 곳. 방송인은 핸들+/live, 그 외는 출처 링크다.
+  watchUrl?: string
   ip?: string
   // 이 화면에서 읽어낸 포지션 전부. 판독에 실패했으면 빈 배열이다.
   positions: IPosition[]
@@ -173,7 +174,7 @@ const positionReports = {
   },
   // 슬랙 mrkdwn의 링크는 마크다운이 아니라 <URL|텍스트> 형식이다.
   notify: async (report: IPositionReport): Promise<void> => {
-    const title = report.link ? `<${report.link}|${report.name}>` : `*${report.name}*`
+    const title = report.watchUrl ? `<${report.watchUrl}|${report.name}>` : `*${report.name}*`
     const value = JSON.stringify({ id: report.id, reportedAt: report.reportedAt })
     const usable = sortByNotional((report.positions || []).filter(hasUsableValues))
     const shown = usable.slice(0, SLACK_OPTION_LIMIT)
@@ -289,7 +290,7 @@ const positionReports = {
     // 이미 처리됐거나 더 최신 제보가 있는 경우다. 남길 수치가 없으니 사유만 적는다.
     if (!report) return `⚠️ ${message} — ${who} · ${when}`
 
-    const title = report.link ? `<${report.link}|${report.name}>` : `*${report.name}*`
+    const title = report.watchUrl ? `<${report.watchUrl}|${report.name}>` : `*${report.name}*`
     // 반영된 것만 적는다. 판독한 것 전부를 적으면 승인하지 않은 포지션까지
     // 승인된 것처럼 기록에 남는다.
     const applied = positions || selectedPositions(report)

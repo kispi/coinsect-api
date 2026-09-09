@@ -102,14 +102,14 @@ test('resolutionText: 반영된 포지션이 한 줄에 남는다', () => {
     report: report({
       lane: 'desktop',
       name: '웨돔',
-      link: 'https://www.youtube.com/watch?v=abc',
+      watchUrl: 'https://www.youtube.com/@wedom/live',
       positions: [pos('BTCUSDT', 8.478, 64919.5, 63885)],
     }),
   })
 
   assert.equal(
     text,
-    '✅ 승인됨 — 🖥 <https://www.youtube.com/watch?v=abc|웨돔> · BTCUSDT 롱 8.478 @64,919.5 · 청산 63,885 · chanho · 09-09 09:40',
+    '✅ 승인됨 — 🖥 <https://www.youtube.com/@wedom/live|웨돔> · BTCUSDT 롱 8.478 @64,919.5 · 청산 63,885 · chanho · 09-09 09:40',
   )
 })
 
@@ -117,7 +117,7 @@ test('resolutionText: 여러 개를 승인하면 전부 적는다', () => {
   const positions = [pos('BTCUSDT', 8.478, 64919.5, 63885), pos('SOXLUSDT', -913.55, 138.3, 145.79)]
   const text = resolved({ report: report({ lane: 'human', name: '뉴비', positions }), positions })
 
-  // 사람 제보는 link가 없어 이름만 굵게 나온다. 숏은 부호 대신 '숏'으로 적는다.
+  // 사람 제보는 watchUrl이 없어 이름만 굵게 나온다. 숏은 부호 대신 '숏'으로 적는다.
   assert.equal(
     text,
     '✅ 승인됨 — 🙋 *뉴비* · BTCUSDT 롱 8.478 @64,919.5 · 청산 63,885 / SOXLUSDT 숏 913.55 @138.3 · 청산 145.79 · chanho · 09-09 09:40',
@@ -158,7 +158,7 @@ test('notify: 판독한 포지션이 체크박스로 나가고, 기본은 전부
   const positions = [pos('BTCUSDT', 8.478, 64919.5), pos('ETHUSDT', 3, 2000)]
 
   await withSlack(sent, () => positionReports.notify(report({
-    lane: 'desktop', name: '웨돔', link: 'https://x', positions, imageUrl: 'https://img',
+    lane: 'desktop', name: '웨돔', watchUrl: 'https://x', positions, imageUrl: 'https://img',
   })))
 
   const [message] = sent

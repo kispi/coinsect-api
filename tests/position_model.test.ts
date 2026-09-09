@@ -6,6 +6,7 @@ import {
   pickPosition,
   upsertPositions,
   toStreamer,
+  watchUrl,
   unseenContracts,
 } from '../services/content/position_model'
 
@@ -142,4 +143,45 @@ test('upsertPositions: 지울 목록이 비면 아무것도 지우지 않는다'
   const next = upsertPositions(current, [pos('ZECUSDT', -974, 1179)], makeId)
 
   assert.deepEqual(next.map(o => o.contract).sort(), ['BTCUSDT', 'ZECUSDT'])
+})
+
+test('watchUrl: 방송인은 핸들+/live, 그 외는 출처 링크', () => {
+  // 방송을 껐다 켜면 watch URL이 바뀐다. 핸들에 /live를 붙이면 유튜브가 알아서
+  // 그 순간의 방송으로 보내고, 방송 중이 아니면 채널 페이지로 떨어진다.
+  assert.equal(
+    watchUrl({ channelUrl: 'https://www.youtube.com/@zzap9' }),
+    'https://www.youtube.com/@zzap9/live',
+  )
+  // 이미 /live가 붙어 있어도 두 번 붙이지 않는다.
+  assert.equal(
+    watchUrl({ channelUrl: 'https://www.youtube.com/@zzap9/live' }),
+    'https://www.youtube.com/@zzap9/live',
+  )
+  // 방송인이 아닌 항목(사토시, 테슬라 등)은 채널이 없고 출처 기사가 있다.
+  assert.equal(watchUrl({ sourceUrl: 'https://river.com/learn' }), 'https://river.com/learn')
+  // 채널이 있으면 그쪽이 우선이다.
+  assert.equal(
+    watchUrl({ channelUrl: 'https://www.youtube.com/@x', sourceUrl: 'https://other' }),
+    'https://www.youtube.com/@x/live',
+  )
+  assert.equal(watchUrl({}), null)
+})
+
+test('toStreamer: 옛 link를 방송인은 버리고 그 외는 출처로 살린다', () => {
+  // 방송인의 link는 '그 순간의 방송' 주소라 핸들로 다시 만들 수 있다.
+  const streamer = toStreamer({
+    id: 's1', name: '짭구', channelUrl: 'https://www.youtube.com/@zzap9',
+    link: 'https://www.youtube.com/watch?v=old', positions: [],
+  })
+  assert.equal(streamer['link'], undefined)
+  assert.equal(streamer.sourceUrl, undefined)
+  assert.equal(watchUrl(streamer), 'https://www.youtube.com/@zzap9/live')
+
+  // 채널이 없는 항목의 link는 근거 기사다. 버리면 갈 곳이 없어진다.
+  const showcase = toStreamer({
+    id: 's2', name: 'Tesla', link: 'https://www.coindesk.com/tesla', positions: [],
+  })
+  assert.equal(showcase['link'], undefined)
+  assert.equal(showcase.sourceUrl, 'https://www.coindesk.com/tesla')
+  assert.equal(watchUrl(showcase), 'https://www.coindesk.com/tesla')
 })

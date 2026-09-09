@@ -15,6 +15,7 @@ import {
   toStreamer,
   unseenContracts,
   upsertPositions,
+  watchUrl,
 } from './position_model'
 import { IModelUsage, addUsage, emptyUsage, mergeUsage } from './model_usage'
 import awsService from '../aws'
@@ -86,19 +87,19 @@ export const POSITION_SCHEMA_PROMPT = `
 const createStreamer = ({
   image,
   name,
-  link,
   channelUrl,
+  sourceUrl,
 }: {
   image: string,
   name: string,
-  link?: string,
   channelUrl?: string,
+  sourceUrl?: string,
 }): IStreamer => ({
   id: newId(),
   image,
   name,
-  link,
   channelUrl,
+  sourceUrl,
   onAir: true,
   editable: true,
   lastUpdate: now(),
@@ -187,7 +188,7 @@ const realTimePositionService = {
           requester: `${u.profile.nickname} / ${u.token}`,
           ip: c.req.ip,
           name: payload['name'] || (found || {}).name,
-          link: (found || {}).link,
+          watchUrl: watchUrl(found || {}),
           positions: [reported],
           reportedAt: now(),
         })
@@ -222,7 +223,7 @@ const realTimePositionService = {
 
     if ((o.name || '').length > 20) throw { message: '스트리머 이름은 20자 미만으로 적어주세요' }
     if ((o.image || '').length > 255) throw { message: '255자 미만의 이미지 URL을 사용해주세요' }
-    if ((o.link || '').length > 255) throw { message: '255자 미만의 방송플랫폼 URL을 사용해주세요' }
+    if ((o.sourceUrl || '').length > 255) throw { message: '255자 미만의 출처 URL을 사용해주세요' }
     if ((o.channelUrl || '').length > 255) throw { message: '255자 미만의 채널 URL을 사용해주세요' }
   },
   all: async () => {
@@ -243,8 +244,8 @@ const realTimePositionService = {
         ...createStreamer({
           image: payload.image,
           name: payload.name,
-          link: payload.link,
           channelUrl: payload.channelUrl,
+          sourceUrl: payload.sourceUrl,
         }),
         positions: [],
       })
@@ -274,7 +275,7 @@ const realTimePositionService = {
       found.onAir = payload.onAir
       found.image = (payload.image || '').trim()
       found.name = (payload.name || '').trim()
-      found.link = (payload.link || '').trim()
+      found.sourceUrl = (payload.sourceUrl || '').trim() || undefined
       found.channelUrl = (payload.channelUrl || '').trim()
       found.editable = payload.editable
 
@@ -412,10 +413,10 @@ const realTimePositionService = {
     const found = data.find(o => o.id === positionId)
     if (!found) throw { message: '해당 포지션을 찾을 수 없습니다.' }
 
-    // 방송 상태와 링크는 canonical에 바로 반영한다. positionHasChanged가 보는 필드가
-    // 아니므로 여기서는 브로드캐스트도 푸시도 발생하지 않는다.
+    // 방송 상태만 canonical에 바로 반영한다. positionHasChanged가 보는 필드가 아니므로
+    // 여기서는 브로드캐스트도 푸시도 발생하지 않는다.
+    // 방송 주소는 더 이상 저장하지 않는다 - 핸들에 /live를 붙이면 그 순간의 방송으로 간다.
     found.onAir = isLive
-    if (isLive && videoId) found.link = `https://www.youtube.com/watch?v=${videoId}`
     found.lastUpdate = now()
     await setRealTimePositions(cachedPositions)
 
@@ -465,7 +466,7 @@ const realTimePositionService = {
       lane: 'desktop',
       requester: 'coinsect-api-desktop',
       name: found.name,
-      link: found.link,
+      watchUrl: watchUrl(found),
       positions,
       // 기본은 전부 체크. 판독은 대개 맞으므로 틀린 것만 풀는 쪽이 클릭이 적다.
       selected: positions.map(o => o.contract),
