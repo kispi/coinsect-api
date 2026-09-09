@@ -245,7 +245,7 @@ const realTimePositionService = {
       const found = data.find(o => o.id === payload.id)
       if (!found) return Promise.reject({ message: 'invalid request' })
 
-      const before = pickPosition(found.positions)
+      const before = [...(found.positions || [])]
 
       // 수치는 문자열로 온다. 어드민 폼이 input 값을 그대로 보낸다.
       found.positions = (payload.positions || [])
@@ -277,7 +277,7 @@ const realTimePositionService = {
     const found = data.find(o => o.id === streamerId)
     if (!found) return Promise.reject({ message: 'invalid request' })
 
-    const before = pickPosition(found.positions)
+    const before = [...(found.positions || [])]
 
     found.positions = upsertPositions(found.positions, positions, newId)
     found.onAir = true
@@ -285,15 +285,20 @@ const realTimePositionService = {
     await positionReports.remove(streamerId)
     await realTimePositionService.commit(found, before)
   },
-  // 저장하고, 대표 포지션이 바뀌었을 때만 알린다. 사이드 포지션이 꿈틀거려도 조용하다.
-  commit: async (streamer: IStreamer, before?: IPosition) => {
-    const after = pickPosition(streamer.positions)
-    const changed = positionSetHasChanged(before ? [before] : [], after ? [after] : [])
+  // 저장하고, 대표 포지션이 바뀌었을 때만 유저에게 알린다. 사이드 포지션이 꿈틀거려도
+  // 브로드캐스트와 푸시는 나가지 않는다.
+  //
+  // lastUpdate는 알림 여부와 따로 움직여야 한다. 둘을 묶어두면 사이드 포지션만 승인했을 때
+  // 화면의 '몇 분 전'이 그대로여서, 반영이 됐는데도 아무 일도 안 일어난 것처럼 보인다.
+  // lastUpdate는 '데이터를 마지막으로 만진 시각', 알림은 '유저를 방해할 만한 변화인가'다.
+  commit: async (streamer: IStreamer, before: IPosition[]) => {
+    const positions = streamer.positions || []
 
-    if (changed) {
-      streamer.lastUpdate = now()
-      announce(streamer)
-    }
+    if (positionSetHasChanged(before || [], positions)) streamer.lastUpdate = now()
+
+    const [was, is] = [pickPosition(before || []), pickPosition(positions)]
+    if (positionSetHasChanged(was ? [was] : [], is ? [is] : [])) announce(streamer)
+
     await setRealTimePositions(cachedPositions)
   },
   delete: async id => {

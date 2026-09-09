@@ -170,3 +170,41 @@ test('validate: 롱/숏의 청산가 방향과 계약 형식을 본다', async (
   assert.match(await rejection([pos('BTCUSDT', -1, 200, 100)]), /숏포지션/)
   assert.match(await rejection([pos('BTCKRW', 1, 100)]), /USDT/)
 })
+
+test('사이드 포지션만 승인해도 lastUpdate는 움직인다', async () => {
+  const target = await streamer()
+  target.positions = [
+    { id: 'btc', ...pos('BTCUSDT', 8.478, 64919.5) },
+    { id: 'sol', ...pos('SOLUSDT', 100, 150) },
+  ]
+  target.lastUpdate = '2026-01-01T00:00:00+09:00'
+
+  const reportedAt = '2026-09-09T16:00:00+09:00'
+  await positionReports.put(report({
+    id: target.id, reportedAt, positions: [pos('SOLUSDT', 120, 150)], selected: ['SOLUSDT'],
+  }))
+
+  const sent = await silenced(async box => { await approve(target.id, reportedAt); return box })
+
+  // 알림은 대표가 안 바뀌었으니 나가지 않는다.
+  assert.equal(sent.alerts.length, 0)
+  // 하지만 반영은 됐으므로 '몇 분 전'은 움직여야 한다. 안 그러면 승인해도 아무 일도
+  // 일어나지 않은 것처럼 보인다.
+  assert.notEqual((await streamer()).lastUpdate, '2026-01-01T00:00:00+09:00', 'lastUpdate가 갱신된다')
+})
+
+test('바뀐 것이 없으면 lastUpdate도 그대로다', async () => {
+  const target = await streamer()
+  target.positions = [{ id: 'btc', ...pos('BTCUSDT', 8.478, 64919.5) }]
+  target.lastUpdate = '2026-01-01T00:00:00+09:00'
+
+  const reportedAt = '2026-09-09T17:00:00+09:00'
+  // 판독값이 canonical과 같다. 승인해도 실제로 바뀌는 것이 없다.
+  await positionReports.put(report({
+    id: target.id, reportedAt, positions: [pos('BTCUSDT', 8.478, 64919.5)], selected: ['BTCUSDT'],
+  }))
+
+  await silenced(() => approve(target.id, reportedAt))
+
+  assert.equal((await streamer()).lastUpdate, '2026-01-01T00:00:00+09:00')
+})
