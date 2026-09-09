@@ -49,7 +49,7 @@ const contentController = {
         c.res.failed(e)
       }
     },
-    // 슬랙 버튼 클릭. 슬랙은 3초 안의 응답을 요구하므로 먼저 200을 주고,
+    // 슬랙 인터랙션. 슬랙은 3초 안의 응답을 요구하므로 먼저 200을 주고,
     // 실제 반영과 메시지 갱신은 response_url로 이어서 한다.
     slackInteraction: async (c: IContext) => {
       c.res.success()
@@ -58,6 +58,19 @@ const contentController = {
         const payload = JSON.parse(c.req.body['payload'])
         const action = (payload.actions || [])[0]
         if (!action) return
+
+        // 체크박스를 토글할 때도 여기로 온다. 선택만 적어두고 메시지는 그대로 둔다.
+        // 이걸 걸러내지 않으면 토글 한 번이 승인으로 처리된다.
+        if (action.action_id === 'position_select') {
+          const { id } = JSON.parse(action.block_id || '{}')
+          await service.content.realTimePosition.selectReported(
+            id,
+            (action.selected_options || []).map(o => o.value),
+          )
+          return
+        }
+
+        if (action.action_id !== 'position_approve' && action.action_id !== 'position_reject') return
 
         // <@U…> 멘션으로 넣으면 슬랙이 표시 이름으로 렌더해주지만, ID를 못 찾으면 빈 칩이
         // 그려져 기록 한가운데 정체불명의 막대가 남는다. 평문으로 적는다.
@@ -80,10 +93,10 @@ const contentController = {
           when,
         })
 
-        await axios.post(payload.response_url, {
-          replace_original: true,
-          text: result.text,
-        })
+        // 반영하지 못한 경우(체크가 비었음)는 원본을 남겨야 다시 눌러볼 수 있다.
+        await axios.post(payload.response_url, result.ok
+          ? { replace_original: true, text: result.text }
+          : { replace_original: false, response_type: 'ephemeral', text: result.text })
       } catch (e) {
         log.error('slackInteraction failed:', e)
       }

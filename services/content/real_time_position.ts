@@ -4,37 +4,27 @@ import helpers from '../../core/helpers'
 import useCache from '../../core/cache'
 import presets from '../../constants/position_presets'
 import IContext from '../../core/interfaces/context'
-import positionReports, { positionHasChanged, hasUsableValues, IPositionReport } from './position_reports'
+import positionReports, { IPositionReport, selectedPositions } from './position_reports'
+import {
+  IPosition,
+  IStreamer,
+  hasUsableValues,
+  pickPosition,
+  positionSetHasChanged,
+  sortByNotional,
+  toStreamer,
+  upsertPositions,
+} from './position_model'
 import awsService from '../aws'
 import { log } from '../../core/logger'
 import chatService from '../chat'
 
 const now = () => helpers.dayjs().format()
-
-// 화면에서 읽어낸 포지션 한 건. canonical(IRealTimePosition)의 부분집합이다.
-type IPositionValues = {
-  contract?: string
-  entryPrice?: number
-  liqPrice?: number
-  size?: number
-}
-
-type IRealTimePosition = {
-  id: string
-  name: string
-  link: string
-  channelUrl: string
-  image: string
-  contract: string
-  entryPrice: number
-  liqPrice: number
-  size: number
-  onAir: boolean,
-  editable: boolean,
-  lastUpdate: Date | string,
-}
+const newId = () => helpers.crypto.generateUUID(true)
 
 const cache = useCache()
+
+export { pickPosition }
 
 // 벤치(tools/bench_position_models.ts)가 이 상수를 그대로 import해 쓴다. 프롬프트를 한 곳에서만
 // 관리해야 '벤치에서 이긴 설정'과 '운영이 실제로 쓰는 설정'이 어긋나지 않는다. 2026-09-09에
@@ -79,24 +69,7 @@ export const POSITION_SCHEMA_PROMPT = `
   }
 `
 
-// 한 화면에 BTC/ETH/SOL이 동시에 잡혀 있는 경우가 있다. canonical은 스트리머당 포지션 하나라
-// 대표를 골라야 하는데, 코인 개수는 코인마다 자릿수가 달라(0.5 BTC vs 16,570 KORU) 그대로
-// 비교할 수 없다. 명목가(|수량| x 진입가)로 '가장 크게 건 포지션'을 고른다.
-// 순위를 못 매기면 고르지 않는다. 사람이 스샷을 보고 판단하는 편이 낫다.
-export const pickPosition = (positions): IPositionValues => {
-  const usable = (positions || []).filter(p => p && hasUsableValues(p))
-  if (!usable.length) return null
-  if (usable.length === 1) return usable[0]
-
-  const notional = p => Math.abs(parseFloat(p.size)) * Math.abs(parseFloat(p.entryPrice))
-  const ranked = [...usable].sort((a, b) => notional(b) - notional(a))
-
-  // 1등과 2등이 같으면 어느 쪽이 대표인지 정할 근거가 없다.
-  if (notional(ranked[0]) === notional(ranked[1])) return null
-  return ranked[0]
-}
-
-const createPosition = ({
+const createStreamer = ({
   image,
   name,
   link,
@@ -106,24 +79,49 @@ const createPosition = ({
   name: string,
   link?: string,
   channelUrl?: string,
-}): IRealTimePosition => ({
-  id: helpers.crypto.generateUUID(true),
+}): IStreamer => ({
+  id: newId(),
   image,
   name,
-  entryPrice: null,
-  liqPrice: null,
-  contract: 'BTCUSDT',
-  size: null,
   link,
   channelUrl,
   onAir: true,
   editable: true,
   lastUpdate: now(),
+  positions: [],
 })
 
-let cachedPositions = {
-  data: presets.map(createPosition),
+let cachedPositions: { data: IStreamer[], lastUpdate: string } = {
+  data: presets.map(createStreamer),
   lastUpdate: null,
+}
+
+// 대표 포지션 기준으로 유저에게 알린다. 사이드 포지션이 꿈틀거려도 조용해야 한다.
+const describe = (position?: IPosition) => `
+  계약 / 규모: ${(position || {}).contract || '-'} / ${(position || {}).size || '-'}
+  진입 / 청산: ${(position || {}).entryPrice || '-'} / ${(position || {}).liqPrice || '-'}
+`
+
+const announce = (streamer: IStreamer) => {
+  const headline = pickPosition(streamer.positions)
+
+  chatService.broadcast({
+    type: 'alert',
+    text: `
+      [${streamer.name}] 포지션이 업데이트되었습니다.
+      ${describe(headline)}
+    `,
+    meta: {
+      ...streamer,
+      $$alertType: 'realTimePosition',
+    },
+  })
+  chatService.broadcastPushNotifications({
+    title: `[${streamer.name}] 포지션이 업데이트되었습니다.`,
+    body: describe(headline),
+    icon: streamer.image,
+    link: 'https://coinsect.io/indicators/positions',
+  })
 }
 
 const setRealTimePositions = async o => {
@@ -145,16 +143,29 @@ const realTimePositionService = {
   changeNotification: {
     delete: (id: string) => positionReports.remove(id),
     all: () => positionReports.all(),
+    // 유저가 화면을 보고 직접 고쳐 보내는 제보. 포지션 하나만 다룬다 - 유저는 모달에서
+    // 계약 하나를 골라 수정한다.
     create: async (c: IContext) => {
-      const found = cachedPositions.data.find(o => o.id === c.req.body['id'])
+      const { data } = await realTimePositionService.all()
+      const found = data.find(o => o.id === c.req.body['id'])
       if (found && !found.editable) return Promise.reject({ message: '수정이 불가능한 포지션입니다.' })
 
       const payload = c.req.body
+      const reported: IPosition = {
+        contract: payload['contract'],
+        entryPrice: payload['entryPrice'],
+        liqPrice: payload['liqPrice'],
+        size: payload['size'],
+      }
 
-      if (!positionHasChanged(found, payload)) return Promise.reject({ message: '제출하신 포지션이 기존 포지션과 동일합니다.' })
+      // 같은 계약의 기존 포지션과 비교한다. 다른 계약을 새로 제보하는 것은 항상 변경이다.
+      const current = ((found || {}).positions || []).find(o => o.contract === reported.contract)
+      if (!positionSetHasChanged(current ? [current] : [], [reported])) {
+        return Promise.reject({ message: '제출하신 포지션이 기존 포지션과 동일합니다.' })
+      }
 
       try {
-        await realTimePositionService.validate(payload)
+        await realTimePositionService.validate({ name: payload['name'], positions: [reported] })
         const u = await chatService.getUser(payload['token'])
 
         return await positionReports.file({
@@ -164,11 +175,7 @@ const realTimePositionService = {
           ip: c.req.ip,
           name: payload['name'] || (found || {}).name,
           link: (found || {}).link,
-          contract: payload['contract'],
-          entryPrice: payload['entryPrice'],
-          liqPrice: payload['liqPrice'],
-          size: payload['size'],
-          onAir: payload['onAir'],
+          positions: [reported],
           reportedAt: now(),
         })
       } catch (e) {
@@ -176,113 +183,130 @@ const realTimePositionService = {
       }
     },
   },
-  validate: async o => {
+  // 포지션 한 건의 수치 검증. 스트리머 하나가 여러 개를 들 수 있어 따로 뗐다.
+  validatePosition: (o: IPosition) => {
     const p = parseFloat
     if (
-      (o.liqPrice && isNaN(p(o.liqPrice))) ||
-      (o.entryPrice && isNaN(p(o.entryPrice))) ||
-      (o.size && isNaN(p(o.size)))
+      (o.liqPrice && isNaN(p(String(o.liqPrice)))) ||
+      (o.entryPrice && isNaN(p(String(o.entryPrice)))) ||
+      (o.size && isNaN(p(String(o.size))))
     ) throw { message: '진입가, 청산가, 규모는 숫자여야 합니다.' }
 
     if (o.liqPrice && o.entryPrice && o.size) {
-      if (p(o.liqPrice) > p(o.entryPrice) && o.size > 0) throw { message: '롱포지션의 청산가가 진입가보다 높을 수는 없습니다' }
-      if (p(o.liqPrice) < p(o.entryPrice) && o.size < 0) throw { message: '숏포지션의 청산가가 진입가보다 낮을 수는 없습니다' }
+      if (p(String(o.liqPrice)) > p(String(o.entryPrice)) && o.size > 0) throw { message: '롱포지션의 청산가가 진입가보다 높을 수는 없습니다' }
+      if (p(String(o.liqPrice)) < p(String(o.entryPrice)) && o.size < 0) throw { message: '숏포지션의 청산가가 진입가보다 낮을 수는 없습니다' }
     }
+
+    if (o.contract && !o.contract.endsWith('USDT')) throw { message: '계약은 반드시 USDT로 끝나야 합니다' }
+  },
+  validate: async o => {
+    (o.positions || []).forEach(realTimePositionService.validatePosition)
+
+    // 한 스트리머가 같은 계약을 두 번 들 수는 없다. 승인 반영이 계약을 키로 쓰기 때문에
+    // 중복이 있으면 조용히 하나가 다른 하나를 덮어쓴다.
+    const contracts = (o.positions || []).map(p => (p.contract || '').trim()).filter(Boolean)
+    if (new Set(contracts).size !== contracts.length) throw { message: '같은 계약을 두 번 넣을 수는 없습니다' }
 
     if ((o.name || '').length > 20) throw { message: '스트리머 이름은 20자 미만으로 적어주세요' }
     if ((o.image || '').length > 255) throw { message: '255자 미만의 이미지 URL을 사용해주세요' }
     if ((o.link || '').length > 255) throw { message: '255자 미만의 방송플랫폼 URL을 사용해주세요' }
     if ((o.channelUrl || '').length > 255) throw { message: '255자 미만의 채널 URL을 사용해주세요' }
-    if (o.contract && !o.contract.endsWith('USDT')) throw { message: '계약은 반드시 USDT로 끝나야 합니다' }
   },
   all: async () => {
     // 매번 레디스에서 읽어오도록 해야 나중에 서버가 분산되었을 때 data-sync 문제가 없고, 레디스의 RPS는 워낙 높아서 걱정할 수준이 아님.
     const stored = await cache.get('content:realTimePositions')
-    if (stored) cachedPositions = stored
+    // 2026-09-09 이전 저장분은 스트리머와 포지션이 한 객체에 섞여 있다. 읽을 때 감싼다.
+    if (stored) cachedPositions = { ...stored, data: (stored.data || []).map(o => toStreamer(o, newId)) }
     return cachedPositions
   },
-  set: async (payload, submittedByUser?) => {
+  // 어드민 저장. 스트리머 하나를 통째로 받는다. positions 배열이 곧 정답이고,
+  // 빠진 포지션은 삭제된 것으로 본다 - 사람이 직접 편집하는 화면이라 그게 놀랍지 않다.
+  // 제보 승인 경로는 이 규칙을 쓰지 않는다(applyReportedPositions 참고).
+  set: async payload => {
+    const { data } = await realTimePositionService.all()
+
     if (!payload.id) {
-      cachedPositions.data.push({
-        id: helpers.crypto.generateUUID(true),
-        image: payload.image,
-        link: payload.link,
-        channelUrl: payload.channelUrl,
-        name: payload.name,
-        liqPrice: null,
-        entryPrice: null,
-        contract: 'BTCUSDT',
-        size: null,
-        onAir: true,
-        editable: true,
-        lastUpdate: now(),
+      data.push({
+        ...createStreamer({
+          image: payload.image,
+          name: payload.name,
+          link: payload.link,
+          channelUrl: payload.channelUrl,
+        }),
+        positions: [],
       })
-      setRealTimePositions(cachedPositions)
+      await setRealTimePositions(cachedPositions)
       return
     }
 
     try {
       await realTimePositionService.validate(payload)
 
-      if (!payload.id) payload.id = helpers.crypto.generateUUID(true)
-
-      const found = cachedPositions.data.find(o => o.id === payload.id)
-      const changed = positionHasChanged(found, payload)
+      const found = data.find(o => o.id === payload.id)
       if (!found) return Promise.reject({ message: 'invalid request' })
 
-      payload.entryPrice ? found.entryPrice = parseFloat(payload.entryPrice) : delete found.entryPrice
-      payload.liqPrice ? found.liqPrice = parseFloat(payload.liqPrice) : delete found.liqPrice
-      payload.size ? found.size = parseFloat(payload.size) : delete found.size
-      found.contract = (payload.contract || '').trim()
+      const before = pickPosition(found.positions)
+
+      // 수치는 문자열로 온다. 어드민 폼이 input 값을 그대로 보낸다.
+      found.positions = (payload.positions || [])
+        .filter(o => hasUsableValues(o))
+        .map(o => ({
+          id: o.id || newId(),
+          contract: (o.contract || '').trim(),
+          entryPrice: parseFloat(String(o.entryPrice)),
+          liqPrice: parseFloat(String(o.liqPrice)),
+          size: parseFloat(String(o.size)),
+        }))
+
       found.onAir = payload.onAir
+      found.image = (payload.image || '').trim()
+      found.name = (payload.name || '').trim()
+      found.link = (payload.link || '').trim()
+      found.channelUrl = (payload.channelUrl || '').trim()
+      found.editable = payload.editable
 
-      if (!submittedByUser) {
-        found.image = (payload.image || '').trim()
-        found.name = (payload.name || '').trim()
-        found.link = (payload.link || '').trim()
-        found.channelUrl = (payload.channelUrl || '').trim()
-        found.editable = payload.editable
-      }
       await positionReports.remove(found.id)
-
-      if (changed) {
-        found.lastUpdate = now()
-        chatService.broadcast({
-          type: 'alert',
-          text: `
-            [${found.name}] 포지션이 업데이트되었습니다.
-            계약 / 규모: ${found.contract || '-'} / ${found.size || '-'}
-            진입 / 청산: ${found.entryPrice || '-'} / ${found.liqPrice || '-'}
-          `,
-          meta: {
-            ...found,
-            $$alertType: 'realTimePosition',
-          },
-        })
-        chatService.broadcastPushNotifications({
-          title: `[${found.name}] 포지션이 업데이트되었습니다.`,
-          body: `
-            계약 / 규모: ${found.contract || '-'} / ${found.size || '-'}
-            진입 / 청산: ${found.entryPrice || '-'} / ${found.liqPrice || '-'}
-          `,
-          icon: found.image,
-          link: 'https://coinsect.io/indicators/positions',
-        })
-      }
-      setRealTimePositions(cachedPositions)
+      await realTimePositionService.commit(found, before)
     } catch (e) {
       return Promise.reject(e)
     }
   },
+  // 승인된 제보를 canonical에 얹는다. 체크된 것만 upsert하고 나머지는 남긴다.
+  applyReportedPositions: async (streamerId: string, positions: IPosition[]) => {
+    const { data } = await realTimePositionService.all()
+    const found = data.find(o => o.id === streamerId)
+    if (!found) return Promise.reject({ message: 'invalid request' })
+
+    const before = pickPosition(found.positions)
+
+    found.positions = upsertPositions(found.positions, positions, newId)
+    found.onAir = true
+
+    await positionReports.remove(streamerId)
+    await realTimePositionService.commit(found, before)
+  },
+  // 저장하고, 대표 포지션이 바뀌었을 때만 알린다. 사이드 포지션이 꿈틀거려도 조용하다.
+  commit: async (streamer: IStreamer, before?: IPosition) => {
+    const after = pickPosition(streamer.positions)
+    const changed = positionSetHasChanged(before ? [before] : [], after ? [after] : [])
+
+    if (changed) {
+      streamer.lastUpdate = now()
+      announce(streamer)
+    }
+    await setRealTimePositions(cachedPositions)
+  },
   delete: async id => {
-    const idx = cachedPositions.data.findIndex(o => o.id === id)
-    if (idx >= 0) cachedPositions.data.splice(idx, 1)
+    // 모듈 캐시만 보면 재배포 뒤 첫 삭제가 프리셋 기본값에 적용된다. 먼저 읽어둔다.
+    const { data } = await realTimePositionService.all()
+    const idx = data.findIndex(o => o.id === id)
+    if (idx >= 0) data.splice(idx, 1)
 
     chatService.broadcast({
       type: 'alert',
       meta: { id, $$deleted: true, $$alertType: 'realTimePosition' },
     })
-    setRealTimePositions(cachedPositions)
+    await setRealTimePositions(cachedPositions)
   },
   autoParse: async ({
     url,
@@ -381,7 +405,7 @@ const realTimePositionService = {
     // 프레임마다 오버레이가 가려지는 정도가 다르다. 읽힌 프레임이 나오면 거기서 멈추고,
     // 끝까지 못 읽으면 마지막 판독을 '판독 불가' 제보로 올린다. 사람이 스샷을 보고
     // 어드민에서 직접 넣으면 되므로, 조용히 버리는 것보다 알리는 편이 낫다.
-    let parsed = null
+    let positions: IPosition[] = null
     let usedFrame = null
     for (const base64 of images || []) {
       let candidate = null
@@ -389,27 +413,25 @@ const realTimePositionService = {
         candidate = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg' }))
       } catch (e) { continue /* JSON이 깨진 응답. 다음 장을 본다. */ }
 
-      parsed = candidate
+      // 못 읽었을 때 모델이 내주는 contract는 'SOXLUSDT Perp'처럼 매번 흔들린다. 그대로
+      // 두면 중복 억제가 매번 '달라졌다'고 판정해 판독 불가 알림이 주기마다 온다.
+      // 쓸 수 있는 포지션만 남겨, 판독 실패는 항상 빈 배열이라는 하나의 모양이 되게 한다.
+      positions = (candidate.legible === false ? [] : (candidate.positions || [])).filter(hasUsableValues)
       usedFrame = base64
-      if (candidate.legible !== false && hasUsableValues(candidate)) break
+      if (positions.length) break
     }
-    if (!parsed) return { isLive, reported: false, reason: '화면에서 포지션을 찾지 못함' }
+    if (!usedFrame) return { isLive, reported: false, reason: '화면에서 포지션을 찾지 못함' }
 
-    // 못 읽었을 때 모델이 내주는 contract는 'SOXLUSDT Perp'처럼 매번 흔들린다. 그대로 두면
-    // 아래 중복 억제가 매번 '달라졌다'고 판정해 판독 불가 알림이 주기마다 온다. 전부 비운다.
-    const legible = parsed.legible !== false && hasUsableValues(parsed)
-    const values = legible
-      ? { contract: parsed.contract, entryPrice: parsed.entryPrice, liqPrice: parsed.liqPrice, size: parsed.size }
-      : { contract: null, entryPrice: null, liqPrice: null, size: null }
-
-    if (!positionHasChanged(found, values)) return { isLive, reported: false, reason: '기존 포지션과 동일' }
+    if (!positionSetHasChanged(found.positions, positions)) return { isLive, reported: false, reason: '기존 포지션과 동일' }
 
     // 관리자가 승인하지 않고 두면 canonical은 계속 낡은 값이라, 위 비교만으로는
     // 같은 알림이 주기마다 영원히 온다. 직전 제보와도 달라야 다시 알린다.
     // 값이 같으면 기존 제보를 건드리지 않는다. reportedAt이 바뀌면 이미 보낸
     // 슬랙 메시지의 버튼이 죽기 때문이다.
     const previous = await positionReports.find(positionId)
-    if (previous && !positionHasChanged(previous, values)) return { isLive, reported: false, reason: '직전 제보와 동일' }
+    if (previous && !positionSetHasChanged(previous.positions, positions)) {
+      return { isLive, reported: false, reason: '직전 제보와 동일' }
+    }
 
     // 제보로 확정된 뒤에만 올린다. 억제된 판독까지 올리면 쓰이지 않을 파일이 쌓인다.
     // 실패해도 제보 자체는 나가야 하므로 삼키고 진행한다. (이미지 없이 렌더된다)
@@ -432,14 +454,20 @@ const realTimePositionService = {
       requester: 'coinsect-api-desktop',
       name: found.name,
       link: found.link,
-      ...values,
-      legible,
+      positions,
+      // 기본은 전부 체크. 판독은 대개 맞으므로 틀린 것만 풀는 쪽이 클릭이 적다.
+      selected: positions.map(o => o.contract),
       ...image,
       reportedAt: now(),
     })
 
-    return { isLive, reported: true, legible, position: values }
+    return { isLive, reported: true, positions }
   },
+  // 슬랙 버튼에서 온 승인/거절을 적용한다. 누가 언제 눌렀는지는 슬랙 페이로드에서만
+  // 알 수 있어 컨트롤러가 넘겨주고, 기록 문구는 여기서 완성해 돌려준다.
+  // 슬랙 체크박스 토글. 사람이 화면과 대조해 남긴 선택을 제보함에 적어둔다.
+  // 이 선택은 승인 클릭 때 읽힌다.
+  selectReported: (id: string, contracts: string[]) => positionReports.select(id, contracts),
   // 슬랙 버튼에서 온 승인/거절을 적용한다. 누가 언제 눌렀는지는 슬랙 페이로드에서만
   // 알 수 있어 컨트롤러가 넘겨주고, 기록 문구는 여기서 완성해 돌려준다.
   resolveReport: async ({ id, reportedAt, approve, who, when }: {
@@ -449,53 +477,48 @@ const realTimePositionService = {
     who: string,
     when: string,
   }) => {
-    const resolution = (message: string, report?: IPositionReport) => ({
+    const resolution = (message: string, report?: IPositionReport, positions?: IPosition[]) => ({
       ok: !!report,
-      text: positionReports.resolutionText({ report, approve, message, who, when }),
+      text: positionReports.resolutionText({ report, approve, message, who, when, positions }),
     })
 
     const report = await positionReports.find(id, reportedAt)
     if (!report) return resolution('제보를 찾을 수 없습니다. (이미 처리됐거나 더 최신 제보가 있습니다)')
 
-    // 메시지가 한 줄 요약으로 교체되면 이 이미지를 참조하는 곳이 없어진다.
-    if (report.imageKey) awsService.s3.deleteObject(report.imageKey).catch(e => log.error('제보 이미지 삭제 실패', e))
+    const chosen = selectedPositions(report)
 
+    // 거절/닫기. canonical은 그대로 두고 제보만 치운다.
     if (!approve) {
+      if (report.imageKey) awsService.s3.deleteObject(report.imageKey).catch(e => log.error('제보 이미지 삭제 실패', e))
       await positionReports.remove(id)
-      return resolution(hasUsableValues(report) ? '거절됨' : '닫힘', report)
+      // 판독한 것 전부를 적는다. 무엇을 거절했는지가 기록으로 남아야 한다.
+      return resolution(chosen.length ? '거절됨' : '닫힘', report, (report.positions || []))
     }
 
-    // 판독에 실패한 제보에는 승인 버튼을 달지 않지만, 사람 제보나 부분 판독으로도
-    // 빈 값이 들어올 수 있다. set()은 빈 값을 '지우라'로 받아들여 포지션을 날리고
-    // 전 유저에게 푸시까지 내보내므로, 반영 직전에 한 번 더 막는다.
-    if (!hasUsableValues(report)) {
-      await positionReports.remove(id)
+    // 슬랙은 버튼을 조건부로 비활성화하지 못한다. 체크를 다 푼 채로 승인을 누를 수 있으므로
+    // 서버에서 막는다. 제보는 남겨둬야 다시 체크해 승인할 수 있다.
+    if (!chosen.length) {
       return {
         ok: false,
         text: positionReports.resolutionText({
           report,
           approve: false,
-          message: '값이 비어 반영하지 않았습니다. 어드민에서 직접 넣어주세요',
+          message: '체크한 포지션이 없어 반영하지 않았습니다',
           who,
           when,
+          positions: [],
         }),
       }
     }
 
-    // set은 모듈 캐시만 보므로, 재배포 뒤 첫 클릭이 프리셋 기본값에 쓰이지 않도록 먼저 읽어둔다.
-    await realTimePositionService.all()
+    // 메시지가 한 줄 요약으로 교체되면 이 이미지를 참조하는 곳이 없어진다.
+    if (report.imageKey) awsService.s3.deleteObject(report.imageKey).catch(e => log.error('제보 이미지 삭제 실패', e))
 
-    // set이 제보를 지우고 broadcast/푸시까지 처리한다.
-    await realTimePositionService.set({
-      id,
-      contract: report.contract,
-      entryPrice: report.entryPrice,
-      liqPrice: report.liqPrice,
-      size: report.size,
-      onAir: true,
-    }, true)
+    // 체크된 것만 upsert한다. 체크하지 않은 기존 포지션은 남는다 - 판독이 일부만 맞는
+    // 경우가 흔한데 승인 한 번에 나머지가 조용히 사라지면 사람이 눈으로 못 잡는다.
+    await realTimePositionService.applyReportedPositions(id, chosen)
 
-    return resolution('승인됨', report)
+    return resolution('승인됨', report, chosen)
   },
 }
 
