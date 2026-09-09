@@ -59,10 +59,11 @@ const contentController = {
         const action = (payload.actions || [])[0]
         if (!action) return
 
-        // <@U…>로 넣으면 슬랙이 표시 이름으로 렌더한다. user.name은 워크스페이스에 따라
-        // 사람 이름이 아니라 도메인 같은 값이 오기도 한다.
+        // <@U…> 멘션으로 넣으면 슬랙이 표시 이름으로 렌더해주지만, ID를 못 찾으면 빈 칩이
+        // 그려져 기록 한가운데 정체불명의 막대가 남는다. 평문으로 적는다.
+        // name은 워크스페이스에 따라 사람 이름이 아니라 도메인('coinsect.io')이 오므로 뒤로 뺀다.
         const user = payload.user || {}
-        const who = user.id ? `<@${user.id}>` : (user.username || user.name || '누군가')
+        const who = user.username || user.name || user.id || '누군가'
         // 서버가 UTC라 그대로 찍으면 아홉 시간 어긋난다. 앱 전역의 타임존 설정을 건드리는
         // 대신 이 문구에서만 옮긴다. 한국은 서머타임이 없어 +9가 항상 맞다.
         const kst = new Date(Date.now() + 1000 * 60 * 60 * 9).toISOString()
