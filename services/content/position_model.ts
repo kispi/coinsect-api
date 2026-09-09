@@ -103,7 +103,11 @@ export const upsertPositions = (
 // 2026-09-09 이전 저장분은 스트리머와 포지션이 한 객체에 섞여 있다. 캐시를 비우면
 // 사람이 승인해 쌓아둔 값이 전부 날아가므로, 읽을 때 한 번 감싸서 올린다.
 // 한 번 저장되면 이후로는 새 모양이라 이 경로를 다시 타지 않는다.
-export const toStreamer = (stored, makeId: () => string): IStreamer => {
+//
+// id는 스트리머 id와 계약에서 만들어낸다. 이 변환은 매 읽기마다 도는데(저장할 때까지
+// 레디스는 옛 모양이다) 새 uuid를 뽑으면 GET 두 번이 같은 포지션에 다른 id를 준다.
+// 프론트의 v-for 키가 매번 갈려 5분마다 목록이 통째로 다시 그려진다.
+export const toStreamer = (stored): IStreamer => {
   if (Array.isArray((stored || {}).positions)) return stored
 
   const { contract, entryPrice, liqPrice, size, ...streamer } = stored || {}
@@ -112,6 +116,6 @@ export const toStreamer = (stored, makeId: () => string): IStreamer => {
   return {
     ...streamer,
     // 계약만 있고 수치가 비어 있던 자리(프리셋 기본값)는 포지션으로 세지 않는다.
-    positions: hasUsableValues(legacy) ? [{ id: makeId(), ...legacy }] : [],
+    positions: hasUsableValues(legacy) ? [{ id: `${streamer.id}-${contract}`, ...legacy }] : [],
   }
 }

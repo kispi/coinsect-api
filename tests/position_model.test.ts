@@ -91,18 +91,21 @@ test('toStreamer: 옛 저장분을 포지션 배열로 감싼다', () => {
     contract: 'BTCUSDT', entryPrice: 64919.5, liqPrice: 63885, size: 8.478,
   }
 
-  const migrated = toStreamer(legacy, makeId)
+  const migrated = toStreamer(legacy)
   assert.equal(migrated.positions.length, 1)
   assert.equal(migrated.positions[0].contract, 'BTCUSDT')
   assert.ok(migrated.positions[0].id)
+  // 이 변환은 저장될 때까지 매 읽기마다 돈다. 새 uuid를 뽑으면 GET 두 번이 같은 포지션에
+  // 다른 id를 줘서 프론트의 v-for 키가 매번 갈린다.
+  assert.equal(migrated.positions[0].id, toStreamer(legacy).positions[0].id, 'id는 읽을 때마다 같아야 한다')
   // 스트리머 필드에 포지션 값이 남아 있으면 두 곳이 어긋난다.
   assert.equal(migrated['entryPrice'], undefined)
   assert.equal(migrated.name, '박호두')
 
   // 프리셋 기본값(계약만 있고 수치는 빈 상태)은 포지션으로 세지 않는다.
-  assert.deepEqual(toStreamer({ id: 's2', contract: 'BTCUSDT', size: null }, makeId).positions, [])
+  assert.deepEqual(toStreamer({ id: 's2', contract: 'BTCUSDT', size: null }).positions, [])
 
   // 이미 새 모양이면 그대로 돌려준다.
   const modern = { id: 's3', positions: [{ id: 'p', ...pos('ETHUSDT', 1, 2000) }] }
-  assert.equal(toStreamer(modern, makeId), modern)
+  assert.equal(toStreamer(modern), modern)
 })

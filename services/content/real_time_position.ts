@@ -216,7 +216,7 @@ const realTimePositionService = {
     // 매번 레디스에서 읽어오도록 해야 나중에 서버가 분산되었을 때 data-sync 문제가 없고, 레디스의 RPS는 워낙 높아서 걱정할 수준이 아님.
     const stored = await cache.get('content:realTimePositions')
     // 2026-09-09 이전 저장분은 스트리머와 포지션이 한 객체에 섞여 있다. 읽을 때 감싼다.
-    if (stored) cachedPositions = { ...stored, data: (stored.data || []).map(o => toStreamer(o, newId)) }
+    if (stored) cachedPositions = { ...stored, data: (stored.data || []).map(toStreamer) }
     return cachedPositions
   },
   // 어드민 저장. 스트리머 하나를 통째로 받는다. positions 배열이 곧 정답이고,
