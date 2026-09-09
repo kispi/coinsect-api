@@ -55,16 +55,18 @@ const s3Service = {
     }
   },
   // 브라우저가 올리는 경로(getSignedUrl)와 달리, 서버가 이미 손에 쥔 바이트를 바로 올린다.
-  // 슬랙이 image 블록을 렌더하려면 공개로 읽히는 URL이어야 해서 public-read로 둔다.
+  // ACL은 주지 않는다. 버킷에 Block Public Access의 BlockPublicAcls가 켜져 있어
+  // public-read를 붙이면 S3가 PutObject 자체를 AccessDenied로 거부한다.
+  // 공개 읽기는 ACL이 아니라 CloudFront가 담당하므로, 원시 S3 URL(공개 GET이 403이다)
+  // 대신 CDN URL을 돌려준다. 슬랙 image 블록이 읽을 수 있어야 하는 것이 이 URL이다.
   putObject: async ({ key, body, contentType }: { key: string, body: Buffer, contentType: string }) => {
     await s3.send(new PutObjectCommand({
       Bucket,
       Key: key,
       Body: body,
       ContentType: contentType,
-      ACL: 'public-read',
     }))
-    return host + key
+    return helpers.useCdn(key)
   },
   deleteObject: (Key: string) => s3.send(new DeleteObjectCommand({
     Bucket,
