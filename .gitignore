@@ -13,3 +13,6 @@ ormconfig.ts
 ormconfig.postgre.md
 .omc/
 .env.bak-*
+
+# 블로그 글 초안. 레포의 산출물이 아니라 blog.coinsect.io에 붙일 1회용 원고다.
+docs/blog/
