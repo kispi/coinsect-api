@@ -25,6 +25,6 @@ export default [{
 }, {
   'image': 'https://yt3.googleusercontent.com/HDg4jeTmw2gLIGbJ_kLk2ArDYP97H2gnDe3XrGeAyawGViuF-plxwR6TuuEMm6giWlJYCkB_nQ=s176-c-k-c0x00ffffff-no-rj',
   'name': '웨돔',
-  'link': 'https://www.youtube.com/@wedomnbro',
-  'channelUrl': 'https://www.youtube.com/@wedomnbro',
+  'link': 'https://www.youtube.com/@wedombtc',
+  'channelUrl': 'https://www.youtube.com/@wedombtc',
 }]
