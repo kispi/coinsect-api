@@ -66,12 +66,27 @@ const score = (got, truth) => {
   }
 }
 
+// 모델에 따라 thinkingConfig 자체를 400 INVALID_ARGUMENT로 거부한다(2026-09-09 기준
+// gemini-3.5-flash-lite). 그걸 판독 실패로 세면 가장 싼 후보를 재보지도 못하고 떨군다.
+// 설정을 빼고 한 번 더 물어보고, 무엇으로 잰 값인지는 결과에 표시한다.
+const generate = async (genAI, model, contents) => {
+  const base = { responseMimeType: 'application/json' }
+
+  try {
+    const config = { ...base, thinkingConfig: { thinkingBudget: THINKING_BUDGET } }
+    return { res: await genAI.models.generateContent({ model, config, contents }), thinkingConfigured: true }
+  } catch (e) {
+    if (!/INVALID_ARGUMENT/i.test(e.message || String(e))) throw e
+    return { res: await genAI.models.generateContent({ model, config: base, contents }), thinkingConfigured: false }
+  }
+}
+
 const run = async () => {
   const genAI = new GoogleGenAI({ apiKey: KEY })
   const totals = {}
 
   for (const model of MODELS) {
-    totals[model] = { ok: 0, max: 0, ms: 0, inTok: 0, outTok: 0, thoughtTok: 0 }
+    totals[model] = { ok: 0, max: 0, ms: 0, inTok: 0, outTok: 0, thoughtTok: 0, thinkingRejected: false }
     console.log(`\n=== ${model} ===`)
 
     for (const c of CASES) {
@@ -81,18 +96,12 @@ const run = async () => {
       let err = ''
       let usage = {}
       try {
-        const res = await genAI.models.generateContent({
-          model,
-          config: {
-            responseMimeType: 'application/json',
-            thinkingConfig: { thinkingBudget: THINKING_BUDGET },
-          },
-          contents: [
-            { text: PROMPT },
-            { text: SCHEMA_PROMPT },
-            { inlineData: { mimeType: 'image/jpeg', data } },
-          ],
-        })
+        const { res, thinkingConfigured } = await generate(genAI, model, [
+          { text: PROMPT },
+          { text: SCHEMA_PROMPT },
+          { inlineData: { mimeType: 'image/jpeg', data } },
+        ])
+        if (!thinkingConfigured) totals[model].thinkingRejected = true
         got = JSON.parse(res.text)
         usage = res.usageMetadata || {}
       } catch (e) {
@@ -125,7 +134,8 @@ const run = async () => {
     console.log(
       `${m.padEnd(24)} ${t.ok}/${t.max}  평균 ${Math.round(t.ms / CASES.length)}ms  ` +
       `호출당 입력 ${Math.round(t.inTok / CASES.length)}tok / 과금출력 ${Math.round(billedOut / CASES.length)}tok` +
-      `${t.thoughtTok ? ` (thinking ${Math.round(t.thoughtTok / CASES.length)}tok 포함)` : ''}`,
+      `${t.thoughtTok ? ` (thinking ${Math.round(t.thoughtTok / CASES.length)}tok 포함)` : ''}` +
+      `${t.thinkingRejected ? '  ※ thinkingConfig 미지원이라 빼고 측정' : ''}`,
     )
   }
   console.log(`\n케이스 ${CASES.length}건 x 모델 ${MODELS.length}개. 월 비용은 호출당 토큰 x 일 호출수 x 단가로 계산할 것.`)
