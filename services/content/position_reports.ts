@@ -76,8 +76,23 @@ const positionReports = {
     inbox.human = inbox.human.filter(o => o.id !== positionId)
     await write(inbox)
   },
+  // 제보함에 넣고 알린다. 두 레인이 공유하는 마지막 단계다.
+  // 알림이 못 나갔는데 제보를 남겨두면 다음 주기에 '직전 제보와 동일'로 억제돼,
+  // 스트리머가 포지션을 바꿀 때까지 아무 알림도 오지 않는다. 그래서 되돌린다.
+  file: async (report: IPositionReport) => {
+    await positionReports.put(report)
+
+    try {
+      await positionReports.notify(report)
+    } catch (e) {
+      await positionReports.remove(report.id)
+      throw e
+    }
+
+    return report
+  },
   // 슬랙 mrkdwn의 링크는 마크다운이 아니라 <URL|텍스트> 형식이다.
-  notify: async (report: IPositionReport) => {
+  notify: async (report: IPositionReport): Promise<void> => {
     const title = report.link ? `<${report.link}|${report.name}>` : `*${report.name}*`
     const value = JSON.stringify({ id: report.id, reportedAt: report.reportedAt })
 

@@ -53,3 +53,29 @@ test('stale 방어: reportedAt이 어긋나면 제보를 내주지 않는다', a
   await positionReports.remove('p9')
   assert.equal(await positionReports.find('p9', reportedAt), null, '처리된 제보는 다시 눌러도 안 먹는다')
 })
+
+test('file: 슬랙 알림이 실패하면 제보를 되돌린다', async () => {
+  const original = positionReports.notify
+  positionReports.notify = () => Promise.reject(new Error('slack 500'))
+
+  try {
+    await assert.rejects(positionReports.file(report({ id: 'f1', lane: 'desktop' })), /slack 500/)
+    // 되돌리지 않으면 '직전 제보와 동일' 조건에 걸려 다음 주기부터 영원히 조용해진다.
+    assert.equal(await positionReports.find('f1'), null, '알림이 못 나갔으면 제보도 남지 않는다')
+  } finally {
+    positionReports.notify = original
+  }
+})
+
+test('file: 알림이 나갔으면 제보가 남는다', async () => {
+  const original = positionReports.notify
+  positionReports.notify = () => Promise.resolve()
+
+  try {
+    await positionReports.file(report({ id: 'f2', lane: 'desktop' }))
+    assert.ok(await positionReports.find('f2'))
+  } finally {
+    positionReports.notify = original
+    await positionReports.remove('f2')
+  }
+})

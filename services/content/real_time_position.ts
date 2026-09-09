@@ -72,13 +72,6 @@ const setRealTimePositions = async o => {
   }
 }
 
-// 제보 하나를 만들어 저장하고 슬랙으로 알린다. 두 레인이 공유하는 마지막 단계다.
-const fileReport = async (report: IPositionReport) => {
-  await positionReports.put(report)
-  await positionReports.notify(report)
-  return report
-}
-
 const realTimePositionService = {
   presets: () => presets,
   changeNotification: {
@@ -96,7 +89,7 @@ const realTimePositionService = {
         await realTimePositionService.validate(payload)
         const u = await chatService.getUser(payload['token'])
 
-        return await fileReport({
+        return await positionReports.file({
           id: payload['id'],
           lane: 'human',
           requester: `${u.profile.nickname} / ${u.token}`,
@@ -350,7 +343,7 @@ const realTimePositionService = {
       log.error('desktopReport: 프레임 업로드 실패', e)
     }
 
-    await fileReport({
+    await positionReports.file({
       id: positionId,
       lane: 'desktop',
       requester: 'coinsect-api-desktop',
