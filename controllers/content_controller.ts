@@ -3,6 +3,7 @@ import helpers from '../core/helpers'
 import { log } from '../core/logger'
 import IContext from '../core/interfaces/context'
 import useService from '../services'
+import { kstStamp } from '../services/content/position_reports'
 import bitcoinQuotes from '../constants/bitcoin_quotes'
 import countries from '../constants/countries'
 import prices from '../constants/prices'
@@ -77,11 +78,6 @@ const contentController = {
         // name은 워크스페이스에 따라 사람 이름이 아니라 도메인('coinsect.io')이 오므로 뒤로 뺀다.
         const user = payload.user || {}
         const who = user.username || user.name || user.id || '누군가'
-        // 서버가 UTC라 그대로 찍으면 아홉 시간 어긋난다. 앱 전역의 타임존 설정을 건드리는
-        // 대신 이 문구에서만 옮긴다. 한국은 서머타임이 없어 +9가 항상 맞다.
-        const kst = new Date(Date.now() + 1000 * 60 * 60 * 9).toISOString()
-        const when = `${kst.slice(5, 10)} ${kst.slice(11, 16)}` // MM-DD HH:mm
-
         const { id, reportedAt } = JSON.parse(action.value)
         // 어떤 스트리머의 무슨 포지션이었는지는 제보에만 있다. 그래서 기록 문구는
         // 서비스가 만들어 돌려주고, 여기서는 슬랙에서만 알 수 있는 승인자와 시각을 넘긴다.
@@ -90,7 +86,7 @@ const contentController = {
           reportedAt,
           approve: action.action_id === 'position_approve',
           who,
-          when,
+          when: kstStamp(),
         })
 
         // 반영하지 못한 경우(체크가 비었음)는 원본을 남겨야 다시 눌러볼 수 있다.

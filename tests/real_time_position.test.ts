@@ -5,6 +5,7 @@ import positionReports, { IPositionReport } from '../services/content/position_r
 import { IPosition } from '../services/content/position_model'
 import slackService from '../services/slack'
 import chatService from '../services/chat'
+import store from '../store'
 
 const pos = (contract: string, size: number, entryPrice: number, liqPrice = entryPrice * 0.9): IPosition =>
   ({ contract, size, entryPrice, liqPrice })
@@ -232,4 +233,83 @@ test('승인하면 화면에서 사라진 유령 포지션을 지우고, 그래�
   // 유령이 대표 자리를 차지하고 있었으므로, 지우면 대표가 바뀌고 알림이 나간다.
   assert.equal(sent.alerts.length, 1)
   assert.match(sent.alerts[0]['text'], /ZECUSDT/)
+})
+
+// 자동승인은 사람이 걸러주는 층을 없앤다. 켜졌을 때와 꺼졌을 때가 정확히 갈려야 한다.
+const withAutoApprove = async <T>(on: boolean, fn: () => Promise<T>) => {
+  const config = store.state.serverConfig
+  const original = config.POSITION_AUTO_APPROVE
+  config.POSITION_AUTO_APPROVE = on ? 'yes' : 'no'
+  try {
+    return await fn()
+  } finally {
+    config.POSITION_AUTO_APPROVE = original
+  }
+}
+
+const desktopReport = (id: string, positions: IPosition[]) => {
+  // autoParse를 갈아끼워 판독 결과를 고정한다. 실제 모델을 부르지 않는다.
+  const original = realTimePositionService.autoParse
+  realTimePositionService.autoParse = (async () => JSON.stringify({ legible: true, positions })) as never
+
+  return realTimePositionService.desktopReport({
+    positionId: id,
+    videoId: 'vid',
+    isLive: true,
+    images: ['ZmFrZQ=='],
+  }).finally(() => { realTimePositionService.autoParse = original })
+}
+
+test('자동승인이 켜지면 묻지 않고 바로 반영한다', async () => {
+  const target = await streamer()
+  target.positions = [{ id: 'old', ...pos('BTCUSDT', 1, 100) }]
+
+  const result = await silenced(() => withAutoApprove(true, () =>
+    desktopReport(target.id, [pos('ZECUSDT', -974.63, 1179.16, 1343.46)])))
+
+  assert.equal(result.autoApproved, true)
+  // 화면에 없던 BTC는 정리되고 읽은 것만 남는다.
+  assert.deepEqual((await streamer()).positions.map(o => o.contract), ['ZECUSDT'])
+  // 승인 대기가 없으므로 제보함은 비어 있어야 한다. 남으면 다음 주기가 억제된다.
+  assert.equal(await positionReports.find(target.id), null, '제보함에 넣지 않는다')
+})
+
+test('자동승인이 꺼져 있으면 제보만 하고 반영하지 않는다', async () => {
+  const target = await streamer()
+  target.positions = [{ id: 'old', ...pos('BTCUSDT', 1, 100) }]
+
+  const result = await silenced(() => withAutoApprove(false, () =>
+    desktopReport(target.id, [pos('ZECUSDT', -974.63, 1179.16, 1343.46)])))
+
+  assert.equal(result.autoApproved, false)
+  assert.deepEqual((await streamer()).positions.map(o => o.contract), ['BTCUSDT'], 'canonical은 그대로')
+  assert.ok(await positionReports.find(target.id), '승인 대기 제보가 남는다')
+  await positionReports.remove(target.id)
+})
+
+test('자동승인이라도 판독 실패는 반영하지 않고 사람에게 알린다', async () => {
+  const target = await streamer()
+  target.positions = [{ id: 'keep', ...pos('BTCUSDT', 1, 100) }]
+
+  const result = await silenced(() => withAutoApprove(true, () => desktopReport(target.id, [])))
+
+  // 읽은 것이 없으면 지울 근거도 없다. 기존 포지션을 날려선 안 된다.
+  assert.equal(result.autoApproved, false)
+  assert.deepEqual((await streamer()).positions.map(o => o.contract), ['BTCUSDT'])
+  assert.ok(await positionReports.find(target.id), '스샷을 보고 손으로 넣으라는 제보가 남는다')
+  await positionReports.remove(target.id)
+})
+
+test('자동승인은 유저 제보에는 적용되지 않는다', async () => {
+  // 누구나 임의의 포지션을 전체 푸시로 내보낼 수 있으면 안 된다.
+  const target = await streamer()
+  target.positions = [{ id: 'keep', ...pos('BTCUSDT', 1, 100) }]
+
+  await silenced(() => withAutoApprove(true, () => positionReports.file(report({
+    id: target.id, lane: 'human', positions: [pos('ZECUSDT', -974.63, 1179.16)],
+  }))))
+
+  assert.deepEqual((await streamer()).positions.map(o => o.contract), ['BTCUSDT'], 'canonical은 그대로')
+  assert.ok(await positionReports.find(target.id), '사람 제보는 승인 대기로 남는다')
+  await positionReports.remove(target.id)
 })

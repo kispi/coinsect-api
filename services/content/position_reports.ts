@@ -36,6 +36,13 @@ type IInbox = {
 // 슬랙 체크박스는 옵션 10개까지다. 명목가 큰 것부터 싣고 나머지는 잘렸다고 알린다.
 export const SLACK_OPTION_LIMIT = 10
 
+// 사람에게 보이는 시각. 서버는 UTC라 그대로 찍으면 아홉 시간 어긋난다. 앱 전역의
+// 타임존을 건드리는 대신 표시할 때만 옮긴다. 한국은 서머타임이 없어 +9가 항상 맞다.
+export const kstStamp = () => {
+  const kst = new Date(Date.now() + 1000 * 60 * 60 * 9).toISOString()
+  return `${kst.slice(5, 10)} ${kst.slice(11, 16)}` // MM-DD HH:mm
+}
+
 // 승인 대상. 체크된 계약만 남긴다. selected가 없으면(옛 제보) 전부로 본다.
 export const selectedPositions = (report: IPositionReport): IPosition[] => {
   const usable = (report.positions || []).filter(hasUsableValues)
@@ -240,6 +247,21 @@ const positionReports = {
           value,
         }],
       }],
+    })
+  },
+  // 자동승인 모드에서는 물어보지 않고 반영한 뒤 결과만 알린다. 버튼이 없으므로 원본을
+  // 갈아치울 일도 없어 새 메시지로 보낸다.
+  notifyAutoApproved: async (report: IPositionReport, positions: IPosition[]): Promise<void> => {
+    await slackService.postMessage({
+      channel: 'coinsect-api',
+      text: positionReports.resolutionText({
+        report,
+        approve: true,
+        message: '자동 승인됨',
+        who: report.requester,
+        when: kstStamp(),
+        positions,
+      }),
     })
   },
   // 승인/거절 결과는 원본 메시지를 한 줄 요약으로 갈아치운다. 이미지를 남기면 기록이

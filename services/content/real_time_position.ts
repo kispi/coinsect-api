@@ -23,6 +23,14 @@ import chatService from '../chat'
 const now = () => helpers.dayjs().format()
 const newId = () => helpers.crypto.generateUUID(true)
 
+// 자동승인 모드. 켜면 슬랙으로 물어보지 않고 판독을 바로 반영하고 결과만 알린다.
+// 사람이 스샷을 보고 걸러주는 층이 사라지므로 오인식이 그대로 유저 푸시까지 나간다.
+// 판독이 충분히 믿을 만하다고 판단했을 때만 켤 것. (기본은 꺼짐)
+//
+// **데스크톱 제보에만 적용된다.** 유저가 보내는 제보까지 자동으로 반영하면 누구나
+// 임의의 포지션을 전체 푸시로 내보낼 수 있다.
+const autoApproves = () => store.state.serverConfig.POSITION_AUTO_APPROVE === 'yes'
+
 const cache = useCache()
 
 export { pickPosition }
@@ -441,22 +449,10 @@ const realTimePositionService = {
       return { isLive, reported: false, reason: '직전 제보와 동일' }
     }
 
-    // 제보로 확정된 뒤에만 올린다. 억제된 판독까지 올리면 쓰이지 않을 파일이 쌓인다.
-    // 실패해도 제보 자체는 나가야 하므로 삼키고 진행한다. (이미지 없이 렌더된다)
-    let image = { imageUrl: undefined, imageKey: undefined }
-    try {
-      const imageKey = `real_time_positions/${helpers.crypto.generateUUID()}.jpg`
-      const imageUrl = await awsService.s3.putObject({
-        key: imageKey,
-        body: Buffer.from(usedFrame, 'base64'),
-        contentType: 'image/jpeg',
-      })
-      image = { imageUrl, imageKey }
-    } catch (e) {
-      log.error('desktopReport: 프레임 업로드 실패', e)
-    }
+    // 화면에서 사라진 계약. 방송인이 닫은 것으로 보고 정리한다.
+    const unseen = unseenContracts(found.positions, positions)
 
-    await positionReports.file({
+    const report: IPositionReport = {
       id: positionId,
       lane: 'desktop',
       requester: 'coinsect-api-desktop',
@@ -465,14 +461,40 @@ const realTimePositionService = {
       positions,
       // 기본은 전부 체크. 판독은 대개 맞으므로 틀린 것만 풀는 쪽이 클릭이 적다.
       selected: positions.map(o => o.contract),
-      // 화면에서 사라진 계약. 승인하면 지운다. 지금 계산해 담아두는 이유는, 슬랙
-      // 메시지로 사람에게 보여준 목록이 그대로 적용되어야 하기 때문이다.
-      unseen: unseenContracts(found.positions, positions),
-      ...image,
+      // 지금 계산해 담아두는 이유는, 슬랙 메시지로 사람에게 보여준 목록이 그대로
+      // 적용되어야 하기 때문이다.
+      unseen,
       reportedAt: now(),
-    })
+    }
 
-    return { isLive, reported: true, positions }
+    // 자동승인: 물어보지 않고 바로 반영하고 결과만 알린다. 승인 대기가 없으므로
+    // 제보함에 넣지 않고, 스샷도 올리지 않는다 - 승인 시점에 지워질 파일이고,
+    // 무엇을 읽었는지는 결과 한 줄에 수치로 남는다.
+    if (autoApproves() && positions.length) {
+      await realTimePositionService.applyReportedPositions(positionId, positions, unseen)
+      await positionReports.notifyAutoApproved(report, positions)
+      log.info(`desktopReport: 자동승인 ${found.name} — ${positions.map(o => o.contract).join(', ')}`)
+
+      return { isLive, reported: true, autoApproved: true, positions }
+    }
+
+    // 제보로 확정된 뒤에만 올린다. 억제된 판독까지 올리면 쓰이지 않을 파일이 쌓인다.
+    // 실패해도 제보 자체는 나가야 하므로 삼키고 진행한다. (이미지 없이 렌더된다)
+    try {
+      const imageKey = `real_time_positions/${helpers.crypto.generateUUID()}.jpg`
+      report.imageUrl = await awsService.s3.putObject({
+        key: imageKey,
+        body: Buffer.from(usedFrame, 'base64'),
+        contentType: 'image/jpeg',
+      })
+      report.imageKey = imageKey
+    } catch (e) {
+      log.error('desktopReport: 프레임 업로드 실패', e)
+    }
+
+    await positionReports.file(report)
+
+    return { isLive, reported: true, autoApproved: false, positions }
   },
   // 슬랙 버튼에서 온 승인/거절을 적용한다. 누가 언제 눌렀는지는 슬랙 페이로드에서만
   // 알 수 있어 컨트롤러가 넘겨주고, 기록 문구는 여기서 완성해 돌려준다.
