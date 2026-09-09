@@ -79,3 +79,52 @@ test('file: 알림이 나갔으면 제보가 남는다', async () => {
     await positionReports.remove('f2')
   }
 })
+
+const resolved = (o: Partial<Parameters<typeof positionReports.resolutionText>[0]>) =>
+  positionReports.resolutionText({
+    approve: true,
+    message: '승인됨',
+    who: '<@U1>',
+    when: '09-09 09:40',
+    ...o,
+  })
+
+test('resolutionText: 무엇을 승인했는지가 한 줄에 남는다', () => {
+  const text = resolved({
+    report: report({
+      lane: 'desktop',
+      name: '웨돔',
+      link: 'https://www.youtube.com/watch?v=abc',
+      contract: 'BTCUSDT',
+      size: 8.478,
+      entryPrice: 64919.5,
+      liqPrice: 63885,
+    }),
+  })
+
+  assert.equal(
+    text,
+    '✅ 승인됨 — 🖥 <https://www.youtube.com/watch?v=abc|웨돔> · BTCUSDT · 규모 8.478 · 진입 64,919.5 · 청산 63,885 · <@U1> · 09-09 09:40',
+  )
+})
+
+test('resolutionText: 거절은 아이콘만 다르고 기록은 같다', () => {
+  const text = resolved({
+    approve: false,
+    message: '거절됨',
+    // 사람 제보는 link가 없다. notify와 같이 굵게 처리한다.
+    report: report({ lane: 'human', name: '뉴비', contract: 'SOXLUSDT', size: -913.55, entryPrice: 138.3, liqPrice: 145.79 }),
+  })
+
+  assert.equal(text, '❌ 거절됨 — 🙋 *뉴비* · SOXLUSDT · 규모 -913.55 · 진입 138.3 · 청산 145.79 · <@U1> · 09-09 09:40')
+})
+
+test('resolutionText: 수치가 비면 -로 적고, 큰 수는 콤마를 넣는다', () => {
+  const text = resolved({ report: report({ lane: 'desktop', name: '웨돔', entryPrice: 1234567.75 }) })
+  assert.match(text, /· - · 규모 - · 진입 1,234,567\.75 · 청산 - ·/)
+})
+
+test('resolutionText: 제보가 없으면 사유만 남긴다', () => {
+  const text = resolved({ message: '제보를 찾을 수 없습니다. (이미 처리됐거나 더 최신 제보가 있습니다)' })
+  assert.equal(text, '⚠️ 제보를 찾을 수 없습니다. (이미 처리됐거나 더 최신 제보가 있습니다) — <@U1> · 09-09 09:40')
+})

@@ -31,6 +31,20 @@ type IInbox = {
 
 const HUMAN_LIMIT = 5
 
+// 사람이 읽는 수치다. 천단위 콤마를 넣고, 값이 없으면 '-'. toLocaleString의 소수 상한
+// 기본값은 3자리라 그대로 쓰면 기록이 조용히 뭉개진다. 넉넉히 열어둔다.
+const readable = (v?: number | string) => {
+  if (v === null || v === undefined || v === '') return '-'
+  const n = typeof v === 'number' ? v : parseFloat(v)
+  return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 8 }) : String(v)
+}
+
+// 자동 제보인지 사람 손인지 한 눈에 갈리게 한다.
+const LANE_ICON: { [lane in IPositionReport['lane']]: string } = {
+  desktop: '🖥',
+  human: '🙋',
+}
+
 // 데스크톱 제보와 사람 제보를 한 배열에 담으면, 스크립트가 5분마다 5명을 돌 때
 // 데스크톱 제보가 사람 제보를 전부 밀어낸다. 그래서 레인을 나눈다.
 const read = async (): Promise<IInbox> => {
@@ -130,6 +144,25 @@ const positionReports = {
         }],
       }],
     })
+  },
+  // 승인/거절 결과는 원본 메시지를 한 줄 요약으로 갈아치운다. 이미지를 남기면 기록이
+  // 쌓일수록 채널이 세로로 길어져 훑어볼 수 없다. 대신 무엇을 승인했는지를 이 한 줄에 담는다.
+  resolutionText: ({ report, approve, message, who, when }: {
+    report?: IPositionReport,
+    approve: boolean,
+    message: string,
+    who: string,
+    when: string,
+  }) => {
+    // 이미 처리됐거나 더 최신 제보가 있는 경우다. 남길 수치가 없으니 사유만 적는다.
+    if (!report) return `⚠️ ${message} — ${who} · ${when}`
+
+    const title = report.link ? `<${report.link}|${report.name}>` : `*${report.name}*`
+
+    return `${approve ? '✅' : '❌'} ${message} — ${LANE_ICON[report.lane]} ${title}`
+      + ` · ${report.contract || '-'} · 규모 ${readable(report.size)}`
+      + ` · 진입 ${readable(report.entryPrice)} · 청산 ${readable(report.liqPrice)}`
+      + ` · ${who} · ${when}`
   },
 }
 

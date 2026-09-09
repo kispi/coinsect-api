@@ -359,17 +359,29 @@ const realTimePositionService = {
 
     return { isLive, reported: true, position: parsed }
   },
-  // 슬랙 버튼에서 온 승인/거절을 적용한다.
-  resolveReport: async ({ id, reportedAt, approve }: { id: string, reportedAt: string, approve: boolean }) => {
-    const report = await positionReports.find(id, reportedAt)
-    if (!report) return { ok: false, message: '제보를 찾을 수 없습니다. (이미 처리됐거나 더 최신 제보가 있습니다)' }
+  // 슬랙 버튼에서 온 승인/거절을 적용한다. 누가 언제 눌렀는지는 슬랙 페이로드에서만
+  // 알 수 있어 컨트롤러가 넘겨주고, 기록 문구는 여기서 완성해 돌려준다.
+  resolveReport: async ({ id, reportedAt, approve, who, when }: {
+    id: string,
+    reportedAt: string,
+    approve: boolean,
+    who: string,
+    when: string,
+  }) => {
+    const resolution = (message: string, report?: IPositionReport) => ({
+      ok: !!report,
+      text: positionReports.resolutionText({ report, approve, message, who, when }),
+    })
 
-    // 메시지가 텍스트로 교체되면 이 이미지를 참조하는 곳이 없어진다.
+    const report = await positionReports.find(id, reportedAt)
+    if (!report) return resolution('제보를 찾을 수 없습니다. (이미 처리됐거나 더 최신 제보가 있습니다)')
+
+    // 메시지가 한 줄 요약으로 교체되면 이 이미지를 참조하는 곳이 없어진다.
     if (report.imageKey) awsService.s3.deleteObject(report.imageKey).catch(e => log.error('제보 이미지 삭제 실패', e))
 
     if (!approve) {
       await positionReports.remove(id)
-      return { ok: true, message: '거절됨' }
+      return resolution('거절됨', report)
     }
 
     // set은 모듈 캐시만 보므로, 재배포 뒤 첫 클릭이 프리셋 기본값에 쓰이지 않도록 먼저 읽어둔다.
@@ -385,7 +397,7 @@ const realTimePositionService = {
       onAir: true,
     }, true)
 
-    return { ok: true, message: '승인됨' }
+    return resolution('승인됨', report)
   },
 }
 

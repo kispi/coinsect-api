@@ -59,13 +59,6 @@ const contentController = {
         const action = (payload.actions || [])[0]
         if (!action) return
 
-        const { id, reportedAt } = JSON.parse(action.value)
-        const result = await service.content.realTimePosition.resolveReport({
-          id,
-          reportedAt,
-          approve: action.action_id === 'position_approve',
-        })
-
         // <@U…>로 넣으면 슬랙이 표시 이름으로 렌더한다. user.name은 워크스페이스에 따라
         // 사람 이름이 아니라 도메인 같은 값이 오기도 한다.
         const user = payload.user || {}
@@ -75,9 +68,20 @@ const contentController = {
         const kst = new Date(Date.now() + 1000 * 60 * 60 * 9).toISOString()
         const when = `${kst.slice(5, 10)} ${kst.slice(11, 16)}` // MM-DD HH:mm
 
+        const { id, reportedAt } = JSON.parse(action.value)
+        // 어떤 스트리머의 무슨 포지션이었는지는 제보에만 있다. 그래서 기록 문구는
+        // 서비스가 만들어 돌려주고, 여기서는 슬랙에서만 알 수 있는 승인자와 시각을 넘긴다.
+        const result = await service.content.realTimePosition.resolveReport({
+          id,
+          reportedAt,
+          approve: action.action_id === 'position_approve',
+          who,
+          when,
+        })
+
         await axios.post(payload.response_url, {
           replace_original: true,
-          text: `${result.message} — ${who}, ${when}`,
+          text: result.text,
         })
       } catch (e) {
         log.error('slackInteraction failed:', e)
