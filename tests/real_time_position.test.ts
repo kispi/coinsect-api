@@ -208,3 +208,28 @@ test('바뀐 것이 없으면 lastUpdate도 그대로다', async () => {
 
   assert.equal((await streamer()).lastUpdate, '2026-01-01T00:00:00+09:00')
 })
+
+test('승인하면 화면에서 사라진 유령 포지션을 지우고, 그래서 대표가 바뀌면 알린다', async () => {
+  const target = await streamer()
+  // 명목가가 가장 큰 BTC가 대표지만, 방송인은 이걸 이미 닫았다.
+  target.positions = [
+    { id: 'btc', ...pos('BTCUSDT', 59.753, 77804) },   // 명목 $4.6M
+    { id: 'zec', ...pos('ZECUSDT', -974.63, 1179.16) }, // 명목 $1.1M
+  ]
+
+  const reportedAt = '2026-09-09T18:00:00+09:00'
+  await positionReports.put(report({
+    id: target.id,
+    reportedAt,
+    positions: [pos('ZECUSDT', -974.63, 1179.16, 1343.46)],
+    selected: ['ZECUSDT'],
+    unseen: ['BTCUSDT'],
+  }))
+
+  const sent = await silenced(async box => { await approve(target.id, reportedAt); return box })
+
+  assert.deepEqual((await streamer()).positions.map(o => o.contract), ['ZECUSDT'], '유령이 사라진다')
+  // 유령이 대표 자리를 차지하고 있었으므로, 지우면 대표가 바뀌고 알림이 나간다.
+  assert.equal(sent.alerts.length, 1)
+  assert.match(sent.alerts[0]['text'], /ZECUSDT/)
+})

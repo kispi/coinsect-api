@@ -19,6 +19,9 @@ export type IPositionReport = {
   // 승인자가 '화면과 일치한다'고 체크한 계약. 슬랙 체크박스를 토글할 때마다 갱신된다.
   // 기본은 전부다 - 판독은 대개 맞으므로 틀린 것만 체크를 푸는 쪽이 클릭이 적다.
   selected?: string[]
+  // canonical에는 있지만 이 화면에서는 못 본 계약. 승인하면 지운다. 제보 시점에 계산해
+  // 저장한다 - 슬랙 메시지로 사람에게 보여준 그 목록이 그대로 적용되어야 한다.
+  unseen?: string[]
   // 판독에 실제로 쓰인 프레임. 승인자가 'AI가 무엇을 봤는지'를 슬랙에서 바로 본다.
   imageUrl?: string
   imageKey?: string
@@ -206,6 +209,7 @@ const positionReports = {
             :chart_with_upwards_trend: ${title} 포지션 수정 제보 — ${usable.length}개 읽음
             화면과 일치하는 것만 남기고 승인하세요.
             요청자: ${report.requester}${report.ip ? ` (${report.ip})` : ''}
+            ${(report.unseen || []).length ? `:wastebasket: 화면에 없어 지울 포지션: ${report.unseen.join(', ')}` : ''}
             <${ADMIN_URL}|어드민에서 직접 수정>${truncated > 0 ? `\n포지션이 많아 명목가 상위 ${SLACK_OPTION_LIMIT}개만 실었습니다 (${truncated}개 생략).` : ''}
           `),
         },

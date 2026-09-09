@@ -13,6 +13,7 @@ import {
   positionSetHasChanged,
   sortByNotional,
   toStreamer,
+  unseenContracts,
   upsertPositions,
 } from './position_model'
 import awsService from '../aws'
@@ -271,15 +272,17 @@ const realTimePositionService = {
       return Promise.reject(e)
     }
   },
-  // 승인된 제보를 canonical에 얹는다. 체크된 것만 upsert하고 나머지는 남긴다.
-  applyReportedPositions: async (streamerId: string, positions: IPosition[]) => {
+  // 승인된 제보를 canonical에 얹는다. 체크된 것만 upsert하고, 체크하지 않았지만 화면에는
+  // 있던 계약은 그대로 둔다(판독이 틀렸을 뿐 포지션은 살아 있다).
+  // 화면에서 아예 사라진 계약(unseen)은 방송인이 닫은 것으로 보고 지운다.
+  applyReportedPositions: async (streamerId: string, positions: IPosition[], unseen: string[] = []) => {
     const { data } = await realTimePositionService.all()
     const found = data.find(o => o.id === streamerId)
     if (!found) return Promise.reject({ message: 'invalid request' })
 
     const before = [...(found.positions || [])]
 
-    found.positions = upsertPositions(found.positions, positions, newId)
+    found.positions = upsertPositions(found.positions, positions, newId, unseen)
     found.onAir = true
 
     await positionReports.remove(streamerId)
@@ -462,6 +465,9 @@ const realTimePositionService = {
       positions,
       // 기본은 전부 체크. 판독은 대개 맞으므로 틀린 것만 풀는 쪽이 클릭이 적다.
       selected: positions.map(o => o.contract),
+      // 화면에서 사라진 계약. 승인하면 지운다. 지금 계산해 담아두는 이유는, 슬랙
+      // 메시지로 사람에게 보여준 목록이 그대로 적용되어야 하기 때문이다.
+      unseen: unseenContracts(found.positions, positions),
       ...image,
       reportedAt: now(),
     })
@@ -521,7 +527,7 @@ const realTimePositionService = {
 
     // 체크된 것만 upsert한다. 체크하지 않은 기존 포지션은 남는다 - 판독이 일부만 맞는
     // 경우가 흔한데 승인 한 번에 나머지가 조용히 사라지면 사람이 눈으로 못 잡는다.
-    await realTimePositionService.applyReportedPositions(id, chosen)
+    await realTimePositionService.applyReportedPositions(id, chosen, report.unseen || [])
 
     return resolution('승인됨', report, chosen)
   },

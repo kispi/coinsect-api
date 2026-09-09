@@ -6,6 +6,7 @@ import {
   pickPosition,
   upsertPositions,
   toStreamer,
+  unseenContracts,
 } from '../services/content/position_model'
 
 let seq = 0
@@ -108,4 +109,37 @@ test('toStreamer: 옛 저장분을 포지션 배열로 감싼다', () => {
   // 이미 새 모양이면 그대로 돌려준다.
   const modern = { id: 's3', positions: [{ id: 'p', ...pos('ETHUSDT', 1, 2000) }] }
   assert.equal(toStreamer(modern), modern)
+})
+
+test('unseenContracts: 화면에서 사라진 계약을 찾는다', () => {
+  const current = [pos('BTCUSDT', 59.753, 77804), pos('ZECUSDT', -974, 1179)]
+
+  // AI가 ZEC만 읽었다면 BTC는 방송인이 닫은 것이다.
+  assert.deepEqual(unseenContracts(current, [pos('ZECUSDT', -974, 1179)]), ['BTCUSDT'])
+  assert.deepEqual(unseenContracts(current, [pos('ZECUSDT', -974, 1179), pos('BTCUSDT', 60, 77000)]), [])
+
+  // 판독 실패(빈 배열)에는 아무것도 지우지 않는다. '못 읽었다'와 '없다'를 구분할 수 없다.
+  assert.deepEqual(unseenContracts(current, []), [])
+  assert.deepEqual(unseenContracts(current, null), [])
+  assert.deepEqual(unseenContracts([], [pos('BTCUSDT', 1, 100)]), [])
+})
+
+test('upsertPositions: 화면에서 사라진 계약은 지운다', () => {
+  const current = [
+    { id: 'btc', ...pos('BTCUSDT', 59.753, 77804) },   // 유령. 화면에 없다
+    { id: 'zec', ...pos('ZECUSDT', -974, 1179) },
+  ]
+
+  const next = upsertPositions(current, [pos('ZECUSDT', -974.63, 1179.16)], makeId, ['BTCUSDT'])
+
+  assert.deepEqual(next.map(o => o.contract), ['ZECUSDT'])
+  assert.equal(next[0].size, -974.63, '읽은 값으로 갱신된다')
+})
+
+test('upsertPositions: 지울 목록이 비면 아무것도 지우지 않는다', () => {
+  const current = [{ id: 'btc', ...pos('BTCUSDT', 59.753, 77804) }]
+
+  const next = upsertPositions(current, [pos('ZECUSDT', -974, 1179)], makeId)
+
+  assert.deepEqual(next.map(o => o.contract).sort(), ['BTCUSDT', 'ZECUSDT'])
 })

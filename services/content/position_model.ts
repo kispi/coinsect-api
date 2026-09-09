@@ -79,8 +79,10 @@ export const upsertPositions = (
   current: IPosition[],
   incoming: IPosition[],
   makeId: () => string,
+  // 화면에서 사라진 계약. 승인 시 함께 정리한다. 슬랙 메시지가 무엇을 지울지 미리 알린다.
+  remove: string[] = [],
 ): IPosition[] => {
-  const next = [...(current || [])]
+  const next = (current || []).filter(o => !remove.includes(o.contract))
 
   for (const position of incoming || []) {
     if (!hasUsableValues(position)) continue
@@ -98,6 +100,19 @@ export const upsertPositions = (
   }
 
   return next
+}
+
+// 화면을 성공적으로 읽었다면, 그 화면에 없던 계약은 방송인이 닫은 것이다. 그대로 두면
+// 유령 포지션이 영원히 쌓이고, 명목가가 크면 대표 자리까지 차지해 실제 포지션을 가린다.
+// 2026-09-09에 박호두의 BTCUSDT($4.6M)가 ZEC/VVV를 가려 이걸 밟았다.
+//
+// 판독이 실패했을 때(빈 배열)는 아무것도 지우지 않는다. '화면을 못 읽었다'와
+// '포지션이 없다'를 구분할 수 없기 때문이다.
+export const unseenContracts = (current: IPosition[], read: IPosition[]) => {
+  if (!(read || []).length) return []
+
+  const seen = new Set((read || []).map(o => o.contract))
+  return (current || []).map(o => o.contract).filter(contract => !seen.has(contract))
 }
 
 // 2026-09-09 이전 저장분은 스트리머와 포지션이 한 객체에 섞여 있다. 캐시를 비우면
