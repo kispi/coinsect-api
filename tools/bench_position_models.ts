@@ -6,7 +6,7 @@
 // THINKING_BUDGET=-1로 주면 thinking을 켜고 비교할 수 있다.
 import * as fs from 'fs'
 import * as path from 'path'
-import { GoogleGenAI } from '@google/genai'
+import { GoogleGenAI, ThinkingLevel } from '@google/genai'
 import {
   POSITION_PROMPT,
   POSITION_SCHEMA_PROMPT,
@@ -16,9 +16,22 @@ import {
 const KEY = process.env.GOOGLE_AI_STUDIO
 const DIR = path.join(__dirname, '..', 'docs/superpowers/specs/fixtures')
 
-// Gemini 3.x는 기본으로 thinking을 돌아 호출당 수십 초가 걸린다. 0으로 끄고 잰다.
-// 다만 gemini-3.8-flash는 이 값을 무시하고 계속 생각한다(2026-09-09 확인).
+// thinking 제어는 모델 세대마다 다르다. 2.5 계열은 thinkingBudget(0=끔), 3.x 계열은
+// thinkingLevel(minimal/low/medium/high)을 본다. gemini-3.8-flash가 thinkingBudget: 0을
+// 무시하고 계속 생각하는 이유가 이것이다.
+//   THINKING_LEVEL=minimal npx ts-node tools/bench_position_models.ts
 const THINKING_BUDGET = Number.isFinite(parseInt(process.env.THINKING_BUDGET)) ? parseInt(process.env.THINKING_BUDGET) : 0
+// 열거형 값은 대문자다(MINIMAL/LOW/MEDIUM/HIGH). 소문자로 줘도 되게 올려준다.
+const THINKING_LEVEL = (process.env.THINKING_LEVEL || '').toUpperCase()
+
+// THINKING_BUDGET=none이면 thinkingConfig를 아예 보내지 않는다. 운영이 지금 그 상태라
+// '아무것도 안 준 기본값'과 비교하려면 이 모드가 필요하다.
+const THINKING_OFF = process.env.THINKING_BUDGET === 'none'
+
+const thinkingConfig = () => {
+  if (THINKING_LEVEL) return { thinkingLevel: THINKING_LEVEL as ThinkingLevel }
+  return { thinkingBudget: THINKING_BUDGET }
+}
 
 const CASES = [
   { file: 'btc-full.jpg', truth: { contract: 'BTCUSDT', size: 8.478, entryPrice: 64919.5, liqPrice: 63885 } },
@@ -67,7 +80,7 @@ const generate = async (genAI: GoogleGenAI, model: string, contents) => {
   const base = { responseMimeType: 'application/json' }
 
   try {
-    const config = { ...base, thinkingConfig: { thinkingBudget: THINKING_BUDGET } }
+    const config = THINKING_OFF ? { ...base } : { ...base, thinkingConfig: thinkingConfig() }
     return { res: await genAI.models.generateContent({ model, config, contents }), thinkingConfigured: true }
   } catch (e) {
     if (!/INVALID_ARGUMENT/i.test(e.message || String(e))) throw e
@@ -138,7 +151,7 @@ const run = async () => {
     }
   }
 
-  console.log(`\n=== 종합 (thinkingBudget=${THINKING_BUDGET}) ===`)
+  console.log(`\n=== 종합 (${THINKING_OFF ? 'thinkingConfig 없음 = 운영 현행' : THINKING_LEVEL ? `thinkingLevel=${THINKING_LEVEL}` : `thinkingBudget=${THINKING_BUDGET}`}) ===`)
   for (const [m, t] of Object.entries(totals) as [string, any][]) {
     const billedOut = t.outTok + t.thoughtTok
     const perCall = (t.inTok / t.calls / 1e6) * PRICE[m].in + (billedOut / t.calls / 1e6) * PRICE[m].out

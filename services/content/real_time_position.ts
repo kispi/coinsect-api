@@ -320,6 +320,12 @@ const realTimePositionService = {
       model: 'gemini-3.8-flash',
       config: {
         responseMimeType: 'application/json',
+        // 주지 않으면 이 모델은 호출당 2,600토큰씩 생각하고, 그게 출력 단가로 과금된다.
+        // 2026-09-09 실측(픽스처 3장 x 4회): 안 주면 44/48 · 11.7초 · 월 $80,
+        // 0을 주면 48/48 · 4.2초 · 월 $21. 정확도가 오히려 올라가서 트레이드오프가 없다.
+        // thinkingLevel은 3.x의 새 파라미터지만 MINIMAL은 이 모델이 400으로 거부하고
+        // LOW는 안 준 것과 차이가 없다. thinkingBudget이 맞는 손잡이다.
+        thinkingConfig: { thinkingBudget: 0 },
       },
       contents,
     })
