@@ -27,4 +27,10 @@ export default [{
   'name': '웨돔',
   'link': 'https://www.youtube.com/@wedombtc',
   'channelUrl': 'https://www.youtube.com/@wedombtc',
+}, {
+  'image': 'https://yt3.googleusercontent.com/Jl5NuijG16L862WpdZBRzHI9k_YpV0zkkiqAcGgJEfbna7wHYmkR2dzTDkgN9ymi2hHOiBN6-w=s176-c-k-c0x00ffffff-no-rj',
+  // 서버 validate가 이름을 20자 미만으로 제한한다. 채널명은 '자두두 Jadoodoo'다.
+  'name': '자두두',
+  'link': 'https://www.youtube.com/@jadoodoo',
+  'channelUrl': 'https://www.youtube.com/@jadoodoo',
 }]
