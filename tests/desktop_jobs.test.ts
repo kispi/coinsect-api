@@ -72,3 +72,20 @@ test('claimNextJob: 줄이 비면 아무것도 주지 않는다', () => {
   assert.equal(claimNextJob([], NOW).job, null)
   assert.equal(claimNextJob(undefined, NOW).job, null)
 })
+
+test('status: 남은 시간을 지금부터의 상대값으로 준다', async () => {
+  // 만료 시각을 보내면 브라우저가 자기 시계로 빼야 해서 시계가 어긋난 만큼 틀린다.
+  const desktopJobs = (await import('../services/content/desktop_jobs')).default
+
+  await desktopJobs.enqueue({ id: 'sx', name: '짭구', channelUrl: 'https://www.youtube.com/@zzap9' })
+  const { jobs } = await desktopJobs.status()
+  const queued = jobs.find(o => o.streamerId === 'sx')
+
+  assert.ok(queued.remainingMs > 9 * 60 * 1000, '방금 넣었으니 10분에 가깝다')
+  assert.ok(queued.remainingMs <= 10 * 60 * 1000)
+
+  // 처리하면 사라진다 - 타이머가 0이 됐을 때 어드민이 다시 물어보고 지우는 근거다.
+  await desktopJobs.poll()
+  await desktopJobs.poll(jobs.find(o => o.streamerId === 'sx').id)
+  assert.equal((await desktopJobs.status()).jobs.find(o => o.streamerId === 'sx'), undefined)
+})

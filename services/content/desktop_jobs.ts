@@ -89,9 +89,19 @@ const write = (queue: IQueue) => cache.set(KEY, queue)
 
 const desktopJobs = {
   // 어드민 조회. 만료된 것을 걷어낸 상태로 준다 - 화면에 유령 잡이 남지 않는다.
+  //
+  // 남은 시간을 만료 시각이 아니라 '지금부터 몇 ms'로 보낸다. 만료 시각을 보내면 브라우저가
+  // 자기 시계로 빼야 해서 시계가 어긋난 만큼 틀린다. 받은 값에서 경과분만 깎으면
+  // 브라우저 안의 상대 시간만 쓰게 되어 시계 오차가 끼지 않는다.
   status: async () => {
     const queue = await read()
-    const jobs = pruneJobs(queue.jobs, Date.now())
+    const now = Date.now()
+
+    const jobs = pruneJobs(queue.jobs, now).map(job => ({
+      ...job,
+      remainingMs: Math.max(0, QUEUED_TTL_MS - age(job.queuedAt, now)),
+    }))
+
     return { jobs, lastSeenAt: queue.lastSeenAt || null }
   },
   enqueue: async (streamer: { id: string, name: string, channelUrl?: string }) => {
