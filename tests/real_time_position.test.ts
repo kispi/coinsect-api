@@ -33,7 +33,7 @@ test('빈 값 제보를 승인해도 기존 포지션을 지우지 않는다', a
   target.size = 8.478
 
   const reportedAt = '2026-09-09T11:00:00+09:00'
-  await positionReports.put(report({ id: target.id, reportedAt, name: target.name }))
+  await positionReports.put(report({ id: target.id, reportedAt, name: target.name, legible: false }))
 
   const result = await realTimePositionService.resolveReport({
     id: target.id,
@@ -53,7 +53,7 @@ test('빈 값 제보를 승인해도 기존 포지션을 지우지 않는다', a
 
 test('resolutionText: 판독 불가 제보는 수치 자리에 판독 불가라고 적는다', () => {
   const text = positionReports.resolutionText({
-    report: report({ name: '박호두' }),
+    report: report({ name: '박호두', legible: false }),
     approve: false,
     message: '닫힘',
     who: '<@U1>',

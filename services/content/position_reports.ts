@@ -21,6 +21,9 @@ export type IPositionReport = {
   // 판독에 실제로 쓰인 프레임. 승인자가 'AI가 무엇을 봤는지'를 슬랙에서 바로 본다.
   imageUrl?: string
   imageKey?: string
+  // 화면에서 포지션을 읽어내지 못한 제보. 수치가 없으므로 승인할 수 없고,
+  // 사람이 스샷을 보고 어드민에서 직접 넣으라고 알리는 용도다.
+  legible?: boolean
   reportedAt: string
 }
 
@@ -30,6 +33,9 @@ type IInbox = {
 }
 
 const HUMAN_LIMIT = 5
+
+// 판독이 틀렸거나 비었을 때 사람이 손으로 고치러 가는 곳이다.
+const ADMIN_URL = 'https://admin.coinsect.io/real-time-positions'
 
 // 셋 중 하나라도 비면 canonical에 반영해선 안 된다. set()은 빈 값을 '지우라'는 뜻으로
 // 받아들여 컬럼을 날리고 "포지션이 업데이트되었습니다 / 진입 - / 청산 -"를 전 유저에게
@@ -115,39 +121,53 @@ const positionReports = {
   notify: async (report: IPositionReport): Promise<void> => {
     const title = report.link ? `<${report.link}|${report.name}>` : `*${report.name}*`
     const value = JSON.stringify({ id: report.id, reportedAt: report.reportedAt })
+    const readable = hasUsableValues(report)
+
+    // 판독 불가는 승인할 수치가 없다. 승인 버튼을 달면 빈 값이 canonical을 지운다.
+    const buttons = readable ? [{
+      type: 'button',
+      action_id: 'position_approve',
+      style: 'primary',
+      text: { type: 'plain_text', text: '승인' },
+      value,
+    }, {
+      type: 'button',
+      action_id: 'position_reject',
+      text: { type: 'plain_text', text: '거절' },
+      value,
+    }] : [{
+      type: 'button',
+      action_id: 'position_reject',
+      text: { type: 'plain_text', text: '닫기' },
+      value,
+    }]
+
+    // 판독이 틀렸을 때도 사람이 바로 고치러 갈 수 있게 어드민 링크를 함께 건다.
+    const body = readable ? `
+      :chart_with_upwards_trend: ${title} 포지션 수정 제보
+      계약 / 규모: ${report.contract || '-'} / ${report.size || '-'}
+      진입 / 청산: ${report.entryPrice || '-'} / ${report.liqPrice || '-'}
+      요청자: ${report.requester}${report.ip ? ` (${report.ip})` : ''}
+      <${ADMIN_URL}|어드민에서 직접 수정>
+    ` : `
+      :question: ${title} 화면에서 포지션을 읽지 못했습니다
+      스샷을 보고 <${ADMIN_URL}|어드민>에서 직접 넣어주세요.
+      요청자: ${report.requester}${report.ip ? ` (${report.ip})` : ''}
+    `
 
     return slackService.postMessage({
       channel: 'coinsect-api',
-      text: `[${report.name}] 포지션 수정 제보`,
+      text: readable ? `[${report.name}] 포지션 수정 제보` : `[${report.name}] 포지션 판독 실패`,
       blocks: [...(report.imageUrl ? [{
         type: 'image',
         image_url: report.imageUrl,
         alt_text: `${report.name} 방송 캡처`,
       }] : []), {
         type: 'section',
-        text: {
-          type: 'mrkdwn',
-          text: helpers.allNewlineTrimmed(`
-            :chart_with_upwards_trend: ${title} 포지션 수정 제보
-            계약 / 규모: ${report.contract || '-'} / ${report.size || '-'}
-            진입 / 청산: ${report.entryPrice || '-'} / ${report.liqPrice || '-'}
-            요청자: ${report.requester}${report.ip ? ` (${report.ip})` : ''}
-          `),
-        },
+        text: { type: 'mrkdwn', text: helpers.allNewlineTrimmed(body) },
       }, {
         type: 'actions',
-        elements: [{
-          type: 'button',
-          action_id: 'position_approve',
-          style: 'primary',
-          text: { type: 'plain_text', text: '승인' },
-          value,
-        }, {
-          type: 'button',
-          action_id: 'position_reject',
-          text: { type: 'plain_text', text: '거절' },
-          value,
-        }],
+        elements: buttons,
       }],
     })
   },
@@ -164,7 +184,7 @@ const positionReports = {
     if (!report) return `⚠️ ${message} — ${who} · ${when}`
 
     const title = report.link ? `<${report.link}|${report.name}>` : `*${report.name}*`
-    // 수치가 빈 제보는 적을 게 없다. 빈 칸을 늘어놓으면 승인해도 되는 제보처럼 보인다.
+    // 판독에 실패한 제보는 적을 수치가 없다. 빈 칸을 늘어놓는 대신 그렇게 적는다.
     const detail = hasUsableValues(report)
       ? `${report.contract || '-'} · 규모 ${readable(report.size)}`
         + ` · 진입 ${readable(report.entryPrice)} · 청산 ${readable(report.liqPrice)}`

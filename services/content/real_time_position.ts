@@ -249,7 +249,13 @@ const realTimePositionService = {
       text: `
         Fill this JSON using the given image.
 
+        Set "legible" to false ONLY when the position overlay is absent, fully covered, or cut off so
+        the digits cannot be seen at all, and leave the numbers null in that case. If you can see the
+        digits, read them and set "legible" to true. Do not use false merely because you are unsure --
+        being unsure is normal, guessing at digits you cannot see is not.
+
         {
+          "legible": boolean,
           "entryPrice": number,
           "liqPrice": number,
           "size": number,
@@ -265,8 +271,13 @@ const realTimePositionService = {
 
     const result = await genAI.models.generateContent({
       // 'gemini-flash-latest'는 떠다니는 별칭이라, 구글이 이걸 다음 티어로 옮기면 배포도
-      // 하지 않았는데 단가와 판독 성향이 함께 바뀐다. 2026-09-08에 4/4로 검증된 이 버전으로 고정한다.
-      // 더 싸게 가려면 gemini-3.5-flash-lite(입력 $0.30/M)로 바꾸면 된다.
+      // 하지 않았는데 단가와 판독 성향이 함께 바뀐다. 버전을 고정한다.
+      //
+      // 2026-09-09에 gemini-3.5-flash-lite(월 $28 → $4)로 내리려다 접었다. 이 프롬프트로
+      // 재보니 BTC 화면은 읽는데 알트코인 화면(SOXL 픽스처)은 9회 중 0회, 전부
+      // legible=false로 넘긴다. 방송인들이 실제로 만지는 게 알트코인이라
+      // (2026-09-09 박호두 KORUUSDT) 비용을 아끼는 게 아니라 자동화를 수동 입력으로
+      // 바꾸는 셈이 된다. 같은 조건에서 이 모델은 9/9로 읽는다.
       model: 'gemini-3.8-flash',
       config: {
         responseMimeType: 'application/json',
@@ -307,26 +318,38 @@ const realTimePositionService = {
 
     if (!isLive) return { isLive, reported: false, reason: '방송 중이 아님' }
 
-    // 판정 계층은 아직 없다. 먼저 읽힌 프레임을 그대로 쓴다.
+    // 프레임마다 오버레이가 가려지는 정도가 다르다. 읽힌 프레임이 나오면 거기서 멈추고,
+    // 끝까지 못 읽으면 마지막 판독을 '판독 불가' 제보로 올린다. 사람이 스샷을 보고
+    // 어드민에서 직접 넣으면 되므로, 조용히 버리는 것보다 알리는 편이 낫다.
     let parsed = null
     let usedFrame = null
     for (const base64 of images || []) {
+      let candidate = null
       try {
-        parsed = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg' }))
-        usedFrame = base64
-        break
-      } catch (e) { /* 프레임마다 가려지는 정도가 달라 실패는 흔하다. 다음 장을 본다. */ }
+        candidate = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg' }))
+      } catch (e) { continue /* JSON이 깨진 응답. 다음 장을 본다. */ }
+
+      parsed = candidate
+      usedFrame = base64
+      if (candidate.legible !== false && hasUsableValues(candidate)) break
     }
     if (!parsed) return { isLive, reported: false, reason: '화면에서 포지션을 찾지 못함' }
 
-    if (!positionHasChanged(found, parsed)) return { isLive, reported: false, reason: '기존 포지션과 동일' }
+    // 못 읽었을 때 모델이 내주는 contract는 'SOXLUSDT Perp'처럼 매번 흔들린다. 그대로 두면
+    // 아래 중복 억제가 매번 '달라졌다'고 판정해 판독 불가 알림이 주기마다 온다. 전부 비운다.
+    const legible = parsed.legible !== false && hasUsableValues(parsed)
+    const values = legible
+      ? { contract: parsed.contract, entryPrice: parsed.entryPrice, liqPrice: parsed.liqPrice, size: parsed.size }
+      : { contract: null, entryPrice: null, liqPrice: null, size: null }
+
+    if (!positionHasChanged(found, values)) return { isLive, reported: false, reason: '기존 포지션과 동일' }
 
     // 관리자가 승인하지 않고 두면 canonical은 계속 낡은 값이라, 위 비교만으로는
     // 같은 알림이 주기마다 영원히 온다. 직전 제보와도 달라야 다시 알린다.
     // 값이 같으면 기존 제보를 건드리지 않는다. reportedAt이 바뀌면 이미 보낸
     // 슬랙 메시지의 버튼이 죽기 때문이다.
     const previous = await positionReports.find(positionId)
-    if (previous && !positionHasChanged(previous, parsed)) return { isLive, reported: false, reason: '직전 제보와 동일' }
+    if (previous && !positionHasChanged(previous, values)) return { isLive, reported: false, reason: '직전 제보와 동일' }
 
     // 제보로 확정된 뒤에만 올린다. 억제된 판독까지 올리면 쓰이지 않을 파일이 쌓인다.
     // 실패해도 제보 자체는 나가야 하므로 삼키고 진행한다. (이미지 없이 렌더된다)
@@ -349,15 +372,13 @@ const realTimePositionService = {
       requester: 'coinsect-api-desktop',
       name: found.name,
       link: found.link,
-      contract: parsed.contract,
-      entryPrice: parsed.entryPrice,
-      liqPrice: parsed.liqPrice,
-      size: parsed.size,
+      ...values,
+      legible,
       ...image,
       reportedAt: now(),
     })
 
-    return { isLive, reported: true, position: parsed }
+    return { isLive, reported: true, legible, position: values }
   },
   // 슬랙 버튼에서 온 승인/거절을 적용한다. 누가 언제 눌렀는지는 슬랙 페이로드에서만
   // 알 수 있어 컨트롤러가 넘겨주고, 기록 문구는 여기서 완성해 돌려준다.
@@ -384,8 +405,9 @@ const realTimePositionService = {
       return resolution(hasUsableValues(report) ? '거절됨' : '닫힘', report)
     }
 
-    // set()은 빈 값을 '지우라'로 받아들여 포지션을 날리고 전 유저에게 푸시까지 내보낸다.
-    // 판독이 일부만 된 제보가 그대로 반영되지 않도록 반영 직전에 막는다.
+    // 판독에 실패한 제보에는 승인 버튼을 달지 않지만, 사람 제보나 부분 판독으로도
+    // 빈 값이 들어올 수 있다. set()은 빈 값을 '지우라'로 받아들여 포지션을 날리고
+    // 전 유저에게 푸시까지 내보내므로, 반영 직전에 한 번 더 막는다.
     if (!hasUsableValues(report)) {
       await positionReports.remove(id)
       return {
