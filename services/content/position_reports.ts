@@ -31,6 +31,12 @@ type IInbox = {
 
 const HUMAN_LIMIT = 5
 
+// 셋 중 하나라도 비면 canonical에 반영해선 안 된다. set()은 빈 값을 '지우라'는 뜻으로
+// 받아들여 컬럼을 날리고 "포지션이 업데이트되었습니다 / 진입 - / 청산 -"를 전 유저에게
+// 푸시한다. 스샷에는 포지션이 멀쩡히 보이는 경우라 사람 눈으로도 못 거른다.
+// set()과 같은 truthy 판정을 쓴다. 다르게 재면 여기서 통과한 값이 저기서 지워진다.
+export const hasUsableValues = (o) => ['entryPrice', 'liqPrice', 'size'].every(field => !!(o || {})[field])
+
 // 사람이 읽는 수치다. 천단위 콤마를 넣고, 값이 없으면 '-'. toLocaleString의 소수 상한
 // 기본값은 3자리라 그대로 쓰면 기록이 조용히 뭉개진다. 넉넉히 열어둔다.
 const readable = (v?: number | string) => {
@@ -158,11 +164,14 @@ const positionReports = {
     if (!report) return `⚠️ ${message} — ${who} · ${when}`
 
     const title = report.link ? `<${report.link}|${report.name}>` : `*${report.name}*`
+    // 수치가 빈 제보는 적을 게 없다. 빈 칸을 늘어놓으면 승인해도 되는 제보처럼 보인다.
+    const detail = hasUsableValues(report)
+      ? `${report.contract || '-'} · 규모 ${readable(report.size)}`
+        + ` · 진입 ${readable(report.entryPrice)} · 청산 ${readable(report.liqPrice)}`
+      : '판독 불가'
 
     return `${approve ? '✅' : '❌'} ${message} — ${LANE_ICON[report.lane]} ${title}`
-      + ` · ${report.contract || '-'} · 규모 ${readable(report.size)}`
-      + ` · 진입 ${readable(report.entryPrice)} · 청산 ${readable(report.liqPrice)}`
-      + ` · ${who} · ${when}`
+      + ` · ${detail} · ${who} · ${when}`
   },
 }
 

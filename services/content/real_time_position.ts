@@ -4,7 +4,7 @@ import helpers from '../../core/helpers'
 import useCache from '../../core/cache'
 import presets from '../../constants/position_presets'
 import IContext from '../../core/interfaces/context'
-import positionReports, { positionHasChanged, IPositionReport } from './position_reports'
+import positionReports, { positionHasChanged, hasUsableValues, IPositionReport } from './position_reports'
 import awsService from '../aws'
 import { log } from '../../core/logger'
 import chatService from '../chat'
@@ -381,7 +381,23 @@ const realTimePositionService = {
 
     if (!approve) {
       await positionReports.remove(id)
-      return resolution('거절됨', report)
+      return resolution(hasUsableValues(report) ? '거절됨' : '닫힘', report)
+    }
+
+    // set()은 빈 값을 '지우라'로 받아들여 포지션을 날리고 전 유저에게 푸시까지 내보낸다.
+    // 판독이 일부만 된 제보가 그대로 반영되지 않도록 반영 직전에 막는다.
+    if (!hasUsableValues(report)) {
+      await positionReports.remove(id)
+      return {
+        ok: false,
+        text: positionReports.resolutionText({
+          report,
+          approve: false,
+          message: '값이 비어 반영하지 않았습니다. 어드민에서 직접 넣어주세요',
+          who,
+          when,
+        }),
+      }
     }
 
     // set은 모듈 캐시만 보므로, 재배포 뒤 첫 클릭이 프리셋 기본값에 쓰이지 않도록 먼저 읽어둔다.

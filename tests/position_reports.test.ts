@@ -119,9 +119,17 @@ test('resolutionText: 거절은 아이콘만 다르고 기록은 같다', () => 
   assert.equal(text, '❌ 거절됨 — 🙋 *뉴비* · SOXLUSDT · 규모 -913.55 · 진입 138.3 · 청산 145.79 · <@U1> · 09-09 09:40')
 })
 
-test('resolutionText: 수치가 비면 -로 적고, 큰 수는 콤마를 넣는다', () => {
+test('resolutionText: 큰 수는 콤마를 넣고, 계약만 비면 -로 적는다', () => {
+  const text = resolved({
+    report: report({ lane: 'desktop', name: '웨돔', entryPrice: 1234567.75, liqPrice: 1200000, size: 8.478 }),
+  })
+  assert.match(text, /· - · 규모 8\.478 · 진입 1,234,567\.75 · 청산 1,200,000 ·/)
+})
+
+test('resolutionText: 수치가 하나라도 비면 판독 불가로 적는다', () => {
+  // 진입가만 읽힌 부분 판독. 빈 칸을 늘어놓으면 승인해도 되는 제보처럼 보인다.
   const text = resolved({ report: report({ lane: 'desktop', name: '웨돔', entryPrice: 1234567.75 }) })
-  assert.match(text, /· - · 규모 - · 진입 1,234,567\.75 · 청산 - ·/)
+  assert.equal(text, '✅ 승인됨 — 🖥 *웨돔* · 판독 불가 · <@U1> · 09-09 09:40')
 })
 
 test('resolutionText: 제보가 없으면 사유만 남긴다', () => {
