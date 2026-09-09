@@ -31,6 +31,34 @@ const contentController = {
         c.res.failed(e)
       }
     },
+    // 어드민의 '지금 캡처'. 집 PC가 다음 폴링(5초)에 집어간다.
+    enqueueCapture: async (c: IContext) => {
+      try {
+        const { data } = await service.content.realTimePosition.all()
+        const found = data.find(o => o.id === c.req.params['id'])
+        if (!found) return c.res.failed({ message: '해당 스트리머를 찾을 수 없습니다.' })
+        if (!found.channelUrl) return c.res.failed({ message: '채널 핸들이 없어 자동 캡처 대상이 아닙니다.' })
+
+        c.res.asJSON(await service.content.desktopJobs.enqueue(found))
+      } catch (e) {
+        c.res.failed(e)
+      }
+    },
+    desktopJobs: async (c: IContext) => {
+      try {
+        c.res.asJSON(await service.content.desktopJobs.status())
+      } catch (e) {
+        c.res.failed(e)
+      }
+    },
+    // 집 PC의 폴링. 하트비트와 잡 인수를 한 번에 한다.
+    pollDesktopJobs: async (c: IContext) => {
+      try {
+        c.res.asJSON(await service.content.desktopJobs.poll(c.req.body['done']))
+      } catch (e) {
+        c.res.failed(e)
+      }
+    },
     desktopTargets: async (c: IContext) => {
       try {
         c.res.asJSON(await service.content.realTimePosition.desktopTargets())

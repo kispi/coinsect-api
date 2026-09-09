@@ -12,6 +12,9 @@ const PEAK_MS = num(process.env.PEAK_INTERVAL_MS, 1000 * 60 * 5)
 const OFFPEAK_MS = num(process.env.OFFPEAK_INTERVAL_MS, 1000 * 60 * 60)
 const PEAK_FROM = num(process.env.PEAK_FROM_HOUR, 21)
 const PEAK_TO = num(process.env.PEAK_TO_HOUR, 3)
+// 어드민에서 '지금 캡처'를 누른 잡을 얼마나 자주 확인할지. 응답이 {"job":null} 수준이라
+// 서버 부담은 없다. 이 값이 곧 '버튼 누르고 실제로 돌기까지'의 지연이다.
+const JOB_POLL_MS = num(process.env.JOB_POLL_MS, 5000)
 const FRAMES = parseInt(process.env.FRAMES) || 3
 const FRAME_INTERVAL_SEC = parseInt(process.env.FRAME_INTERVAL_SEC) || 4
 
@@ -98,16 +101,52 @@ const runOnceAndExit = async keyword => {
   process.exit(failed ? 1 : 0)
 }
 
-// 인자가 없으면 켜두는 용도. 시간대에 따라 주기를 바꿔가며 전부 돈다.
+const sleep = ms => new Promise(r => setTimeout(r, ms))
+
+// 인자가 없으면 켜두는 용도.
+//
+// 루프는 하나다. 정기 주기와 즉시 실행 잡을 각각 다른 루프에 두면 정기 한 바퀴 도는 중에
+// 잡이 들어와 **같은 IP에서 yt-dlp가 병렬로 돌 수 있다** - 봇 차단을 자초하는 상황이다.
+// 그래서 5초마다 깨어나 '잡이 있으면 잡, 없고 시간이 됐으면 정기 한 바퀴'를 순차로 한다.
+//
+// 덤으로 setTimeout으로 최대 한 시간을 통째로 자던 것이 없어져 주기 설정 변경이 즉시 먹는다.
 const runForever = async () => {
   log(`주기: ${PEAK_FROM}~${PEAK_TO}시 ${PEAK_MS / 1000}초, 그 외 ${OFFPEAK_MS / 1000}초 (KST)`)
+  log(`즉시 실행 확인: ${JOB_POLL_MS / 1000}초마다`)
+
+  let nextCycleAt = 0     // 0이면 지금 바로 한 바퀴 돈다
+  let doneId
 
   // 집에 사람이 없는 동안 조용히 멈춰 있으면 알아챌 방법이 없으므로 루프는 죽지 않는다.
   for (;;) {
-    await runOnce().catch(e => log(`한 바퀴 실패: ${e.message}`))
-    const wait = intervalMs()
-    log(`다음 바퀴까지 ${wait / 1000}초 (${isPeak() ? '피크' : '비피크'})`)
-    await new Promise(r => setTimeout(r, wait))
+    try {
+      // 끝낸 잡을 알리고 다음 잡을 받는다. 하트비트도 이 호출이 겸한다 -
+      // 서버는 이 시각으로 집 PC가 살아 있는지 판단한다.
+      const { job } = await call('/contents/real_time_positions/desktop_jobs', { done: doneId })
+      doneId = undefined
+
+      if (job) {
+        log(`[즉시] ${job.name}`)
+        try {
+          log(`  → ${JSON.stringify(await captureOne({ id: job.streamerId, name: job.name, channelUrl: job.channelUrl }))}`)
+        } catch (e) {
+          log(`  실패: ${e.message}`)
+        }
+        // 실패해도 끝난 것으로 알린다. 안 그러면 3분 뒤 되돌아와 같은 실패를 반복한다.
+        doneId = job.id
+        continue
+      }
+
+      if (Date.now() >= nextCycleAt) {
+        await runOnce()
+        nextCycleAt = Date.now() + intervalMs()
+        log(`다음 정기 바퀴까지 ${intervalMs() / 1000}초 (${isPeak() ? '피크' : '비피크'})`)
+      }
+    } catch (e) {
+      log(`한 바퀴 실패: ${e.message}`)
+    }
+
+    await sleep(JOB_POLL_MS)
   }
 }
 
