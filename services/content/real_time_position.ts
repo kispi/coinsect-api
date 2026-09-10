@@ -5,6 +5,7 @@ import useCache from '../../core/cache'
 import presets from '../../constants/position_presets'
 import IContext from '../../core/interfaces/context'
 import positionReports, { IPositionReport, selectedPositions } from './position_reports'
+import desktopJobs from './desktop_jobs'
 import {
   IPosition,
   IStreamer,
@@ -419,6 +420,10 @@ const realTimePositionService = {
     found.onAir = isLive
     found.lastUpdate = now()
     await setRealTimePositions(cachedPositions)
+
+    // 화면을 실제로 보러 갔다는 기록. 출처가 정기 사이클이든 사용자 요청이든 같다.
+    // 사용자 요청의 쿨다운이 이 시각을 기준으로 판단된다.
+    await desktopJobs.markCaptured(positionId)
 
     if (!isLive) return { isLive, reported: false, reason: '방송 중이 아님' }
 

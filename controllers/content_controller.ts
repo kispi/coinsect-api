@@ -31,15 +31,24 @@ const contentController = {
         c.res.failed(e)
       }
     },
-    // 어드민의 '지금 캡처'. 집 PC가 다음 폴링(5초)에 집어간다.
-    enqueueCapture: async (c: IContext) => {
+    // '지금 캡처'. 집 PC가 다음 폴링(5초)에 집어간다.
+    // 어드민 경로와 사용자 경로가 같은 일을 하되, 사용자 쪽만 제한을 받는다.
+    enqueueCapture: (byUser: boolean) => async (c: IContext) => {
       try {
         const { data } = await service.content.realTimePosition.all()
         const found = data.find(o => o.id === c.req.params['id'])
         if (!found) return c.res.failed({ message: '해당 스트리머를 찾을 수 없습니다.' })
         if (!found.channelUrl) return c.res.failed({ message: '채널 핸들이 없어 자동 캡처 대상이 아닙니다.' })
 
-        c.res.asJSON(await service.content.desktopJobs.enqueue(found))
+        const result = await service.content.desktopJobs.enqueue(found, { byUser })
+
+        // 막힌 경우도 200으로 준다. 실패가 아니라 '조금 뒤에 다시'라는 뜻이고,
+        // 화면에서 남은 시간을 보여주려면 본문을 읽어야 한다.
+        c.res.asJSON({
+          ...result,
+          // 집 PC가 꺼져 있으면 눌러도 아무 일이 없다. 그걸 눌러본 사람이 알 수 있어야 한다.
+          desktopAlive: await service.content.desktopJobs.alive(),
+        })
       } catch (e) {
         c.res.failed(e)
       }
