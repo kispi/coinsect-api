@@ -166,10 +166,16 @@ test('validate: 같은 계약을 두 번 넣으면 거부한다', async () => {
   assert.equal(await rejection([pos('BTCUSDT', 1, 100), pos('ETHUSDT', 2, 200)]), null)
 })
 
-test('validate: 롱/숏의 청산가 방향과 계약 형식을 본다', async () => {
-  assert.match(await rejection([pos('BTCUSDT', 1, 100, 200)]), /롱포지션/)
-  assert.match(await rejection([pos('BTCUSDT', -1, 200, 100)]), /숏포지션/)
+test('validate: 계약 형식을 본다', async () => {
   assert.match(await rejection([pos('BTCKRW', 1, 100)]), /USDT/)
+})
+
+test('validate: 청산가가 진입가 반대편에 있어도 받아들인다', async () => {
+  // 크로스 마진에서는 청산가가 계정 전체 자산으로 계산된다. 100에 잡은 롱이 150까지
+  // 오른 뒤 다른 포지션이 물리면 이 롱의 청산가가 진입가 위로 올라온다. 펀딩비가 쌓여도
+  // 같은 방향으로 밀린다. '롱은 청산가가 아래'는 격리 마진의 진입 직후에만 참이다.
+  assert.equal(await rejection([pos('BTCUSDT', 1, 100, 200)]), null)
+  assert.equal(await rejection([pos('BTCUSDT', -1, 200, 100)]), null)
 })
 
 test('사이드 포지션만 승인해도 lastUpdate는 움직인다', async () => {
