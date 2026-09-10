@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { claimNextJob, pruneJobs, userRequestBlockedBy, type IDesktopJob } from '../services/content/desktop_jobs'
+import { claimNextJob, pruneJobs, userRequestBlockedBy, USER_HOURLY_LIMIT, type IDesktopJob } from '../services/content/desktop_jobs'
 
 const NOW = new Date('2026-09-09T12:00:00Z').getTime()
 const ago = (ms: number) => new Date(NOW - ms).toISOString()
@@ -129,8 +129,9 @@ test('userRequestBlockedBy: 정기 사이클이 긁은 것도 쿨다운에 넣�
 
 test('userRequestBlockedBy: 시간당 총량을 넘으면 막는다', () => {
   // 스트리머가 늘어도 총량이 함께 늘지 않게 하는 장치다.
+  // 상한이 .env로 조절되므로 테스트가 숫자를 박아두면 값을 바꿀 때마다 깨진다.
   const queued = Object.fromEntries(
-    Array.from({ length: 10 }, (_, i) => [`s${i}`, ago((i + 1) * 60 * 1000)]),
+    Array.from({ length: USER_HOURLY_LIMIT }, (_, i) => [`s${i}`, ago((i + 1) * 1000)]),
   )
 
   const blocked = userRequestBlockedBy({ captured: {}, queued }, 'new', NOW)
@@ -139,7 +140,7 @@ test('userRequestBlockedBy: 시간당 총량을 넘으면 막는다', () => {
 
   // 한 시간이 지난 기록은 창에서 빠져 자리가 난다.
   const expired = Object.fromEntries(
-    Array.from({ length: 10 }, (_, i) => [`s${i}`, ago(61 * 60 * 1000 + i)]),
+    Array.from({ length: USER_HOURLY_LIMIT }, (_, i) => [`s${i}`, ago(61 * 60 * 1000 + i)]),
   )
   assert.equal(userRequestBlockedBy({ captured: {}, queued: expired }, 'new', NOW), null)
 })

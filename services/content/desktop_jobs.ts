@@ -7,6 +7,7 @@
 // 추가해야 한다.
 import useCache from '../../core/cache'
 import helpers from '../../core/helpers'
+import store from '../../store'
 
 const cache = useCache()
 
@@ -37,9 +38,13 @@ export type IJobMap = { [streamerId: string]: IDesktopJob }
 // 그래서 요청자를 세지 않고 스트리머 단위로 묶는다. 사용자들은 어차피 같은 것을 원하므로
 // (그 방송인의 최신 포지션) 중복 제거와 쿨다운만으로 총량이 정해진다. 신원을 위조해도
 // 늘어나지 않는다.
-const USER_COOLDOWN_MS = 5 * 60 * 1000
+// 운영하며 조절할 값이라 .env로 뺀다. 인색하면 실시간성이 목적인 기능이 무용해지고,
+// 헐거우면 비용이 새므로 한 번에 맞추기 어렵다.
+const num = (v: string, fallback: number) => (Number.isFinite(parseInt(v)) ? parseInt(v) : fallback)
+
+const USER_COOLDOWN_MS = num(store.state.serverConfig.CAPTURE_USER_COOLDOWN_SEC, 5 * 60) * 1000
 // 스트리머가 늘어나도 총량이 함께 늘지 않도록 전체에 한 번 더 씌운다.
-const USER_HOURLY_LIMIT = 10
+export const USER_HOURLY_LIMIT = num(store.state.serverConfig.CAPTURE_USER_HOURLY_LIMIT, 30)
 
 // 집 PC가 꺼진 동안 쌓인 잡을 아침에 몰아서 돌리면 안 된다. 지난 건 버린다.
 const QUEUED_TTL_MS = 10 * 60 * 1000
