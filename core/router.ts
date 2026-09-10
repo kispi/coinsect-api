@@ -23,7 +23,7 @@ const useMiddleware = async (
 ) => {
   const c = createContext(req, res)
 
-  const hl = () => JSON.stringify(createHttpLog(req, res))
+  const hl = () => createHttpLog(req, res)
 
   if (middleware) {
     try {
@@ -41,7 +41,7 @@ const useMiddleware = async (
     // e.code가 있으면 서버개발자의 커스텀 에러이고, 없는 경우는 500으로 처리한다.
     if ((e || {}).code) c.res.failed(e, e.code)
     else c.res.error()
-    log.error(hl())
+    log.http(hl(), [e])
     return
   }
 
@@ -59,7 +59,7 @@ const useMiddleware = async (
   ]
   if (routesSkipLog.includes(req.routeOptions.url)) return
 
-  log.info(hl())
+  log.http(hl())
 }
 
 export const useRouter = (app: FastifyInstance) => ({

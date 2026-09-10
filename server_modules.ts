@@ -68,9 +68,7 @@ const handleNotFound = (req: FastifyRequest, res: FastifyReply) => {
 
   // 같은 IP가 존재하지 않는 같은 url로 100번 때릴때마다 한번씩 로그를 찍음
   if (o[k] % 100 === 0) {
-    const l = createHttpLog(req, res)
-    l['missingCount'] = o[k]
-    log.error(JSON.stringify(l))
+    log.http({ ...createHttpLog(req, res), missingCount: o[k] })
   }
 
   res.send({ message: 'Not Found' })
@@ -135,13 +133,13 @@ export const initApp = async (app: FastifyInstance) => {
       || (error as { statusCode?: number }).statusCode
       || res.statusCode
 
-    if (status >= 400 && status < 500) {
-      log.error(`${error.name || 'ClientError'}: ${error.message} ${JSON.stringify(createHttpLog(req, res))}`)
-      return next()
-    }
-
-    log.error('fastify onError hook:', error)
-    log.error(JSON.stringify(createHttpLog(req, res)))
+    // 4xx는 스택을 빼고 한 줄, 5xx는 스택까지. 어느 쪽이든 줄 하나가 JSON 하나다.
+    log.http(
+      { ...createHttpLog(req, res), status },
+      status >= 400 && status < 500
+        ? [`${error.name || 'ClientError'}: ${error.message}`]
+        : [error],
+    )
     next()
   })
   await useMetrics(app)
