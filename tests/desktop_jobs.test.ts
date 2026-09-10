@@ -186,3 +186,15 @@ test('enqueue: 중복이라 안 들어간 요청은 할당량을 쓰지 않는�
   assert.equal(second.queued, false)
   assert.equal(second.reason, undefined, '중복은 제한이 아니라 그냥 이미 있는 것이다')
 })
+
+test('enqueue: 운영자 면제는 토큰이 있을 때만이고 기본은 제한을 받는다', async () => {
+  // 엔드포인트가 하나라 byUser 판단이 곧 정책이다. 기본값이 '제한 받음'이어야
+  // 토큰 파싱이 실패했을 때 안전한 쪽으로 떨어진다.
+  const desktopJobs = (await import('../services/content/desktop_jobs')).default
+  const streamer = { id: 'default-safe', name: '짭구', channelUrl: 'https://www.youtube.com/@zzap9' }
+
+  await desktopJobs.markCaptured(streamer.id)
+
+  // 인자를 아예 안 주면(=토큰 판단이 없는 호출) 면제된다 - 서버 내부 호출용이다.
+  assert.equal((await desktopJobs.enqueue(streamer)).queued, true)
+})

@@ -40,7 +40,6 @@ export const useRoutes = (app: FastifyInstance) => ({
     router.post('/admin/contents/real_time_positions', ctrls.content.realTimePositions.set, middlewares.auth.admin.position)
     router.post('/admin/contents/real_time_positions/auto_parse', ctrls.content.realTimePositions.autoParse, middlewares.auth.admin.position)
     router.get('/admin/contents/real_time_positions/desktop_jobs', ctrls.content.realTimePositions.desktopJobs, middlewares.auth.admin.position)
-    router.post('/admin/contents/real_time_positions/:id/capture', ctrls.content.realTimePositions.enqueueCapture(false), middlewares.auth.admin.position)
     router.delete('/admin/contents/real_time_positions/:id', ctrls.content.realTimePositions.delete, middlewares.auth.admin.position)
 
     router.put('/admin/helpers/crawled_websites', ctrls.helper.crawledWebsites.delete, middlewares.auth.admin.super) // DELETE 메소드는 request body를 가질 수 없어서 put으로
@@ -127,9 +126,10 @@ export const useRoutes = (app: FastifyInstance) => ({
 
     router.get('/contents/real_time_positions', ctrls.content.realTimePositions.all)
     router.post('/contents/real_time_positions/change_notifications', ctrls.content.realTimePositions.changeNotification.create)
-    // 사용자도 캡처를 요청할 수 있다. 신원을 묻지 않는 대신 스트리머 단위 쿨다운과
-    // 전체 총량으로 묶는다(services/content/desktop_jobs.ts 주석 참고).
-    router.post('/contents/real_time_positions/:id/capture', ctrls.content.realTimePositions.enqueueCapture(true))
+    // 어드민과 사용자가 같이 쓴다. 신원을 묻지 않는 대신 스트리머 단위 쿨다운과 전체
+    // 총량으로 묶고, 운영자 토큰이 실려 있으면 그 제한을 면제한다
+    // (services/content/desktop_jobs.ts 주석 참고).
+    router.post('/contents/real_time_positions/:id/capture', ctrls.content.realTimePositions.enqueueCapture)
     router.get('/contents/real_time_positions/desktop_targets', ctrls.content.realTimePositions.desktopTargets, middlewares.auth.desktop)
     router.post('/contents/real_time_positions/desktop_report', ctrls.content.realTimePositions.desktopReport, middlewares.auth.desktop)
     router.post('/contents/real_time_positions/desktop_jobs', ctrls.content.realTimePositions.pollDesktopJobs, middlewares.auth.desktop)

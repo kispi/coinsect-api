@@ -31,10 +31,17 @@ const contentController = {
         c.res.failed(e)
       }
     },
-    // '지금 캡처'. 집 PC가 다음 폴링(5초)에 집어간다.
-    // 어드민 경로와 사용자 경로가 같은 일을 하되, 사용자 쪽만 제한을 받는다.
-    enqueueCapture: (byUser: boolean) => async (c: IContext) => {
+    // '지금 캡처'. 집 PC가 다음 폴링(5초)에 집어간다. 어드민과 사용자가 같은 경로를 쓴다 -
+    // 하는 일이 같은데 라우트를 둘로 두면 한쪽만 고치는 실수가 생긴다.
+    //
+    // 다른 건 제한을 받느냐뿐이고, 그건 토큰으로 갈린다. 운영자에게 면제를 주는 이유는
+    // 오인식을 발견하고 다시 긁으려 할 때 방금 그 오인식 때문에 쿨다운에 걸리기 때문이다.
+    // mustUser는 토큰이 없거나 깨졌으면 조용히 undefined를 준다 - 즉 기본이 '제한 받음'이다.
+    enqueueCapture: async (c: IContext) => {
       try {
+        const admin = await helpers.jwt.mustUser(c)
+        const byUser = (admin || {})['role'] !== 'admin'
+
         const { data } = await service.content.realTimePosition.all()
         const found = data.find(o => o.id === c.req.params['id'])
         if (!found) return c.res.failed({ message: '해당 스트리머를 찾을 수 없습니다.' })
