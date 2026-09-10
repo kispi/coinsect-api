@@ -4,6 +4,7 @@ import { log } from '../core/logger'
 import IContext from '../core/interfaces/context'
 import useService from '../services'
 import { kstStamp } from '../services/content/position_reports'
+import { isLimitedRequest } from '../services/content/desktop_jobs'
 import bitcoinQuotes from '../constants/bitcoin_quotes'
 import countries from '../constants/countries'
 import prices from '../constants/prices'
@@ -39,8 +40,8 @@ const contentController = {
     // mustUser는 토큰이 없거나 깨졌으면 조용히 undefined를 준다 - 즉 기본이 '제한 받음'이다.
     enqueueCapture: async (c: IContext) => {
       try {
-        const admin = await helpers.jwt.mustUser(c)
-        const byUser = (admin || {})['role'] !== 'admin'
+        const user = await helpers.jwt.mustUser(c)
+        const byUser = isLimitedRequest(user, c.req.body)
 
         const { data } = await service.content.realTimePosition.all()
         const found = data.find(o => o.id === c.req.params['id'])

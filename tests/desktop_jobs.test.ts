@@ -199,3 +199,22 @@ test('enqueue: 운영자 면제는 토큰이 있을 때만이고 기본은 제�
   // 인자를 아예 안 주면(=토큰 판단이 없는 호출) 면제된다 - 서버 내부 호출용이다.
   assert.equal((await desktopJobs.enqueue(streamer)).queued, true)
 })
+
+test('isLimitedRequest: 역할이 아니라 명시적 force가 면제 기준이다', async () => {
+  const { isLimitedRequest } = await import('../services/content/desktop_jobs')
+
+  // 여기가 이번 버그의 핵심이다. 운영자가 코인충 화면에서 그냥 누른 요청은
+  // 관리자 토큰을 달고 가지만 force가 없으므로 제한을 받아야 한다.
+  assert.equal(isLimitedRequest({ role: 'admin' }, {}), true)
+  assert.equal(isLimitedRequest({ role: 'admin' }, null), true)
+
+  // 어드민 화면의 '지금 캡처'만 면제된다.
+  assert.equal(isLimitedRequest({ role: 'admin' }, { force: true }), false)
+
+  // force는 클라이언트가 보내는 값이라 관리자가 아니면 의미가 없다.
+  assert.equal(isLimitedRequest({ role: 'user' }, { force: true }), true)
+  assert.equal(isLimitedRequest(null, { force: true }), true)
+
+  // 문자열 'true'를 참으로 받으면 폼 인코딩으로 뚫린다.
+  assert.equal(isLimitedRequest({ role: 'admin' }, { force: 'true' }), true)
+})

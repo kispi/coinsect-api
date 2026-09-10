@@ -1,17 +1,10 @@
 // 어드민이 "지금 캡처"를 누르면 여기 쌓이고, 집 PC가 5초마다 하나씩 집어간다.
 // 집은 NAT 뒤에 있어 서버가 부를 수 없으므로, 즉시 실행도 결국 집이 물어보는 형태다.
-//
-// 큐를 JSON 배열 하나로 둔다. core/cache는 get/set/del만 노출해서 Redis 리스트 연산(LPOP)을
-// 쓸 수 없고, read-modify-write에는 동시 쓰기 레이스가 있다. 운영자 1인 + 워커 1대라
-// 실질적으로 걸리지 않지만, 워커를 여러 대로 늘리면 캐시 인터페이스에 리스트 연산을 먼저
-// 추가해야 한다.
 import useCache from '../../core/cache'
 import helpers from '../../core/helpers'
 import store from '../../store'
 
 const cache = useCache()
-
-const KEY = 'content:desktopJobs'
 
 export type IDesktopJob = {
   id: string
@@ -121,6 +114,20 @@ const liveStamps = async (key: string, now: number) => {
   return live
 }
 
+// 이 요청에 제한을 걸어야 하는가.
+//
+// 기준은 '누구냐'가 아니라 '강제 실행을 명시했느냐'다. 예전에는 role === 'admin'이면
+// 무조건 통과시켰는데, 운영자도 평소에는 코인충 화면을 그냥 쓴다. 그러면 자기 계정으로는
+// 제한이 영원히 안 걸려서 동작을 확인할 방법이 없고, 실제로 쿨다운이 안 먹는 것처럼
+// 보였다(2026-09-10 - desktopUserQueued가 통째로 비어 있었다).
+//
+// force는 클라이언트가 보내는 값이라 그 자체로는 못 믿지만, 관리자 토큰이 있어야만
+// 받아들이므로 위조해도 소용이 없다. 어드민 화면의 '지금 캡처'만 이것을 보낸다.
+export const isLimitedRequest = (
+  user: { role?: string } | null,
+  body: { force?: unknown } | null,
+) => !((user || {}).role === 'admin' && (body || {}).force === true)
+
 // 사용자 요청을 받아도 되는지. 막을 이유가 있으면 그 이유를 돌려준다.
 export const userRequestBlockedBy = (
   { captured, queued }: {
@@ -175,7 +182,7 @@ const desktopJobs = {
     const lastSeenAt = await cache.get(SEEN_KEY)
     return !!lastSeenAt && Date.now() - new Date(lastSeenAt).getTime() < 30 * 1000
   },
-  // byUser면 쿨다운과 총량 제한을 건다. 운영자는 그대로 통과한다.
+  // byUser면 쿨다운과 총량 제한을 건다. isLimitedRequest가 그것을 정한다.
   enqueue: async (
     streamer: { id: string, name: string, channelUrl?: string },
     { byUser = false }: { byUser?: boolean } = {},
