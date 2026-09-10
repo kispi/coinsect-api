@@ -160,6 +160,9 @@ const desktopJobs = {
         .sort((a, b) => (a.queuedAt < b.queuedAt ? -1 : 1))
         .map(job => ({ ...job, remainingMs: Math.max(0, QUEUED_TTL_MS - age(job.queuedAt, now)) })),
       lastSeenAt: lastSeenAt || null,
+      // 스트리머별로 마지막에 화면을 본 시각. lastUpdate(값이 바뀐 시각)와 다르다 -
+      // 값이 그대로여도 보러 가긴 했고, 쿨다운은 이 시각으로 판단한다.
+      capturedAt: await liveStamps(CAPTURED_KEY, now),
     }
   },
   // 캡처가 실제로 일어났음을 기록한다. 정기 사이클도 여기를 지나므로, 방금 긁힌 스트리머는
