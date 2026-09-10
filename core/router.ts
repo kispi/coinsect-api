@@ -46,12 +46,16 @@ const useMiddleware = async (
   }
 
   // 특별할 것 없는 매번 앱 새로고침될때마다 콜되는 API들 스킵함.
+  // 폴링 라우트. 정상 응답이 초 단위로 쌓이는데 그 한 줄 한 줄에 정보가 없다.
+  // (집 PC가 5초, 어드민 화면이 열려 있는 동안 5초)
   const routesSkipLog = [
     '/config',
     '/notifications',
     '/market_info/indices',
     '/market_info/symbols',
     '/market_info/markets',
+    '/contents/real_time_positions/desktop_jobs',
+    '/admin/contents/real_time_positions/desktop_jobs',
   ]
   if (routesSkipLog.includes(req.routeOptions.url)) return
 

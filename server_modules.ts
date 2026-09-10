@@ -123,7 +123,22 @@ export const initApp = async (app: FastifyInstance) => {
     req['$$startTime'] = helpers.now()
     next()
   })
+  // 4xx는 클라이언트가 잘못 보낸 것이고 5xx만 우리 잘못이다. 둘을 같이 취급해 스택을
+  // 찍으면, 옛 클라이언트 하나가 계속 두드리는 것만으로 에러 로그가 채워진다.
+  // 실제로 구 프론트가 MySQL XOR 필터를 분당 9회 보내며 하루 17MB를 만들고 있었다.
+  //
+  // 4xx도 로그는 남긴다 - 어떤 요청이 왜 거절됐는지는 봐야 하고, 그게 급증하면 그것대로
+  // 신호다. 스택트레이스만 뺀다.
   app.addHook('onError', (req, res, error, next) => {
+    const status = (error as { status?: number, statusCode?: number }).status
+      || (error as { statusCode?: number }).statusCode
+      || res.statusCode
+
+    if (status >= 400 && status < 500) {
+      log.error(`${error.name || 'ClientError'}: ${error.message} ${JSON.stringify(createHttpLog(req, res))}`)
+      return next()
+    }
+
     log.error('fastify onError hook:', error)
     log.error(JSON.stringify(createHttpLog(req, res)))
     next()
