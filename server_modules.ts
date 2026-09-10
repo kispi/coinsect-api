@@ -9,6 +9,7 @@ import useChat from './chat/server'
 import marketInfoService from './services/market_info'
 import { dataSource } from './database'
 import { log, createHttpLog } from './core/logger'
+import { useMetrics } from './core/metrics'
 
 axios.defaults.timeout = 1000 * 10
 
@@ -143,6 +144,7 @@ export const initApp = async (app: FastifyInstance) => {
     log.error(JSON.stringify(createHttpLog(req, res)))
     next()
   })
+  await useMetrics(app)
   await dataSource.initialize()
 
   app.setNotFoundHandler(handleNotFound)
