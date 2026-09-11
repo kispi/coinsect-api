@@ -9,7 +9,7 @@ import store from '../store'
 import IContext from '../core/interfaces/context'
 import orm, { QueryOverrides } from '../core/orm'
 import aiUsage from './ai_usage'
-import ragSearch from './rag/search'
+import ragSearch, { IRetrieved } from './rag/search'
 
 // 떠다니는 별칭(gemini-flash-latest)을 쓰지 않는다. 구글이 별칭을 다음 티어로
 // 옮기면 배포도 하지 않았는데 단가와 응답 성향이 함께 바뀌고, 단가표에 그 이름이
@@ -19,6 +19,33 @@ import ragSearch from './rag/search'
 // model_usage.ts의 MODEL_PRICING을 함께 고쳐야 한다 - 표를 안 고치면 기록된
 // 원가만 절반으로 남고 청구서는 두 배로 온다.
 const ANSWER_MODEL = 'gemini-3.8-flash'
+
+// 하루 전체 AI 비용의 상한(USD micros). 닿으면 답변만 끈다 - 검색은 캐시와
+// 키워드 경로로 임베딩 없이도 동작하므로 계속 살려 둔다. 한도 때문에 검색이
+// 통째로 죽는 것보다 결과가 줄어드는 편이 낫다.
+//
+// 개인 한도가 없는 공개 서비스에서 전역 상한은 마지막 방어선이다. 사람이
+// 깨어나기 전에 서비스가 스스로 멈춰야 한다.
+export const DAILY_COST_CAP_MICROS = Number(process.env.AI_DAILY_COST_CAP_MICROS) || 2_000_000 // $2
+
+// 회수된 조각으로 답변 프롬프트를 만든다. 회수가 비면 null - 근거 없이 답하게
+// 두면 그럴듯한 거짓말이 나온다.
+export const buildAnswerPrompt = (q: string, retrieved: IRetrieved[]): string | null => {
+  const usable = retrieved.filter(o => o.content)
+  if (!usable.length) return null
+
+  return `
+Answer the user's question using ONLY the excerpts below. They come from posts on a bitcoin site.
+If the excerpts do not contain the answer, say so instead of guessing.
+
+Question: "${q}"
+
+Excerpts:
+${usable.map((o, i) => `[${i + 1}] ${o.content}`).join('\n\n')}
+
+The result JSON should be a form of { "kr": String, "en": String }
+  `.trim()
+}
 
 const postService = {
   sitemap: async (c: IContext) => {
@@ -71,76 +98,66 @@ const postService = {
   },
   allWithLLM: async (c: IContext) => {
     const boardId = c.req.query['boardId']
-    const q = c.req.query['question']
+    const q = (c.req.query['question'] || '').trim()
     if (!boardId || !q) return Promise.reject({ message: 'boardId or question is missing', status: 400 })
+    if (q.length > 200) return Promise.reject({ message: 'question is too long', status: 400 })
 
     log.info(`allWithLLM: query "${q}" (IP: ${c.req.ip})`)
 
     try {
-      const [data, _] = await c.orm.getRepository(Post).createQueryBuilder()
+      // 회수는 검색과 같은 계층을 쓴다. 옛 구조는 보드의 전 글 제목을 프롬프트에
+      // 넣어 고르게 했다 - 글이 늘면 입력이 선형으로 늘고, 제목만 보므로 본문에만
+      // 있는 내용은 끝내 찾지 못했다.
+      const retrieved = await ragSearch.retrieve({ q, boardId: Number(boardId), limit: 6 })
+
+      const posts = retrieved.length ? await c.orm.getRepository(Post).createQueryBuilder('Post')
         .leftJoinAndSelect('Post.user', 'user')
         .leftJoinAndSelect('user.profile', 'profile')
         .leftJoinAndSelect('Post.board', 'board')
-        .where('Post.board = :boardId', { boardId })
-        .getManyAndCount()
-      await Promise.all([
-        loadChildren({ c, model: Post, childModel: Reply, items: data }),
-        loadChildren({ c, model: Post, childModel: Reaction, items: data }),
-      ])
-      data.forEach((post: Post) => post.mutatePostToBeSecure(c.req.ip))
+        .where('Post.id IN (:...ids)', { ids: retrieved.map(o => o.postId) })
+        .getMany() : []
 
-      const genAI = new GoogleGenAI({ apiKey: store.state.serverConfig.GOOGLE_AI_STUDIO })
-      const generate = async (parts: Array<{ text: string }>) => {
-        const startedAt = Date.now()
-        try {
-          const result = await genAI.models.generateContent({
-            model: ANSWER_MODEL,
-            contents: parts,
-            config: { responseMimeType: 'application/json' },
-          })
-          void aiUsage.record({
-            task: 'post_answer',
-            model: ANSWER_MODEL,
-            usageMetadata: result.usageMetadata,
-            latencyMs: Date.now() - startedAt,
-            requester: c.req.ip,
-          })
-          return result
-        } catch (e) {
-          // 실패한 호출도 남긴다. 실패가 치솟는 것이 이상 징후인데 행이 없으면 안 보인다.
-          void aiUsage.record({
-            task: 'post_answer',
-            model: ANSWER_MODEL,
-            latencyMs: Date.now() - startedAt,
-            ok: false,
-            error: (e || {}).message || String(e),
-            requester: c.req.ip,
-          })
-          throw e
-        }
+      posts.forEach((post: Post) => post.mutatePostToBeSecure(c.req.ip))
+
+      const prompt = buildAnswerPrompt(q, retrieved)
+      if (!prompt) return { data: [], total: 0, answer: null }
+
+      // 오늘 비용이 상한에 닿았으면 근거 글만 주고 답변은 생략한다.
+      //
+      // 조회 자체가 실패하면(예: DB 장애) 상한 도달로 치지 않고 그냥 지나간다.
+      // rateLimit이 캐시 장애 때 통과시키는 것과 같은 이유다 - 집계 조회 실패는
+      // 실제로 상한에 닿았다는 증거가 아니고, 이 검사 하나 때문에 근거 글까지
+      // 함께 날아가 요청 전체가 실패하면 안 된다.
+      let overDailyCap = false
+      try {
+        const today = await aiUsage.daily(aiUsage.utcDay(), aiUsage.utcDay())
+        overDailyCap = today.totalCostMicros >= DAILY_COST_CAP_MICROS
+      } catch (e) {
+        log.error('allWithLLM: 일일 비용 조회 실패. 상한 검사를 건너뛴다.', e)
+      }
+      if (overDailyCap) {
+        log.error('allWithLLM: 일일 비용 상한 도달. 답변을 생략한다.')
+        return { data: posts, total: posts.length, answer: null }
       }
 
-      const prompt1 = `
-User is asking a question: "${q}" about bitcoin.
-Choose the most appropriate 3 (at most) posts within the list below.
-Response should be an array of number.
-If you can't find any, please respond with an empty array.
-You don't need to fill 3, just return 0~3 posts.
+      const genAI = new GoogleGenAI({ apiKey: store.state.serverConfig.GOOGLE_AI_STUDIO })
+      const startedAt = Date.now()
+      const result = await genAI.models.generateContent({
+        model: ANSWER_MODEL,
+        contents: [{ text: prompt }],
+        config: { responseMimeType: 'application/json' },
+      })
 
-${data.map((post: Post) => `post.id: ${post.id} / post.title: ${post.title}`).join('\n')}
-      `.trim()
+      void aiUsage.record({
+        task: 'post_answer',
+        model: ANSWER_MODEL,
+        usageMetadata: result.usageMetadata,
+        latencyMs: Date.now() - startedAt,
+        requester: c.req.ip,
+      })
 
-      const result1 = await generate([{ text: prompt1 }])
-      const selectedPosts = data.filter((post: Post) => JSON.parse(result1.text).includes(post.id))
-
-      const prompt2 = `
-OK, you have chosen the following posts:
-${selectedPosts.map((post: Post) => `post.id: ${post.id} / post.title: ${post.title} / post.content: ${post.content}`).join('\n')}
-Using the information above, provide a answer to the user's question: "${q}" about bitcoin.
-The result JSON should be a form of { "kr": String, "en": String }
-      `
-      const result2 = await generate([{ text: prompt2 }])
-      return { data: selectedPosts, total: selectedPosts.length, answer: JSON.parse(result2.text) }
+      // 응답 모양은 그대로다. ModalBitcoinGPT는 수정이 없다.
+      return { data: posts, total: posts.length, answer: JSON.parse(result.text) }
     } catch (e) {
       log.error('allWithLLM:', e)
       return Promise.reject(e)

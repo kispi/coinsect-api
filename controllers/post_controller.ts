@@ -132,6 +132,22 @@ const postController = {
     }
   },
   allWithLLM: async (c: IContext) => {
+    // search와 같은 이유로 두 층을 둔다 - trustProxy로 c.req.ip가 위조 가능하므로
+    // IP별 한도는 보조 층일 뿐이고, 전역 한도가 실질적인 방어선이다.
+    //
+    // 답변은 검색보다 훨씬 비싸다(임베딩 1회 대비 생성 모델 호출 1회). 한도도
+    // 그만큼 좁게 잡는다 - search보다 느슨하면 여기가 우회로가 된다.
+    if (!c.req.ip) return c.res.failed()
+
+    if (!await rateLimit(`with_llm:${c.req.ip}`, 5, 60)) {
+      return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
+    }
+
+    if (!await rateLimit('with_llm:global', 30, 60)) {
+      log.warn('allWithLLM: 전역 속도 제한 도달. IP 층 우회 가능성', { ip: c.req.ip })
+      return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
+    }
+
     try {
       const { data, total, answer } = await postService.allWithLLM(c)
       c.res.asJSON({ data, total, answer })
