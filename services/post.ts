@@ -9,6 +9,7 @@ import store from '../store'
 import IContext from '../core/interfaces/context'
 import orm, { QueryOverrides } from '../core/orm'
 import aiUsage from './ai_usage'
+import ragSearch from './rag/search'
 
 // 떠다니는 별칭(gemini-flash-latest)을 쓰지 않는다. 구글이 별칭을 다음 티어로
 // 옮기면 배포도 하지 않았는데 단가와 응답 성향이 함께 바뀌고, 단가표에 그 이름이
@@ -144,6 +145,39 @@ The result JSON should be a form of { "kr": String, "en": String }
       log.error('allWithLLM:', e)
       return Promise.reject(e)
     }
+  },
+  // 하이브리드 검색. 기존 /posts?keyword= 는 손대지 않는다 - 어드민과 목록이
+  // 같이 쓰고 limit/offset 페이지네이션을 전제로 돌기 때문이다.
+  search: async (c: IContext) => {
+    const q = (c.req.query['q'] || '').trim()
+    if (!q) return Promise.reject({ message: 'q is missing', status: 400 })
+    if (q.length > 200) return Promise.reject({ message: 'q is too long', status: 400 })
+
+    const boardId = c.req.query['boardId'] ? Number(c.req.query['boardId']) : null
+    const limit = Math.min(Number(c.req.query['limit']) || 20, 20)
+
+    const retrieved = await ragSearch.retrieve({ q, boardId, limit })
+    if (!retrieved.length) return { data: [], total: 0 }
+
+    const posts = await c.orm.getRepository(Post).createQueryBuilder('Post')
+      .leftJoinAndSelect('Post.user', 'user')
+      .leftJoinAndSelect('user.profile', 'profile')
+      .leftJoinAndSelect('Post.board', 'board')
+      .where('Post.id IN (:...ids)', { ids: retrieved.map(o => o.postId) })
+      .getMany()
+
+    posts.forEach((post: Post) => post.mutatePostToBeSecure(c.req.ip))
+
+    // 회수 순서가 곧 랭킹이다. DB가 돌려준 순서가 아니라 이 순서를 지켜야 한다.
+    const byId = new Map(posts.map(p => [p.id, p]))
+    const data = retrieved
+      .map(hit => {
+        const post = byId.get(hit.postId)
+        return post && { ...post, score: hit.score, matchType: hit.matchType }
+      })
+      .filter(Boolean)
+
+    return { data, total: data.length }
   },
 }
 

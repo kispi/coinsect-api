@@ -6,6 +6,7 @@ import helpers from '../core/helpers'
 import postService from '../services/post'
 import ragIndexer from '../services/rag/indexer'
 import { log } from '../core/logger'
+import { rateLimit } from '../core/rate_limit'
 
 // 자유게시판 id
 const freeBoardId = 1
@@ -192,6 +193,18 @@ const postController = {
     } catch (e) {
       c.res.failed()
       return
+    }
+  },
+  search: async (c: IContext) => {
+    // 인증이 없는 공개 경로다. 질의 임베딩이 IP당 비용을 만든다.
+    if (!await rateLimit(`search:${c.req.ip}`, 30, 60)) {
+      return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
+    }
+
+    try {
+      c.res.asJSON(await postService.search(c))
+    } catch (e) {
+      c.res.failed(e)
     }
   },
   checkPassword: async (c: IContext) => {
