@@ -2,6 +2,7 @@ import { createHash } from 'crypto'
 import { GoogleGenAI } from '@google/genai'
 import { dataSource } from '../../database'
 import { log } from '../../core/logger'
+import useCache from '../../core/cache'
 import store from '../../store'
 import aiUsage from '../ai_usage'
 
@@ -24,6 +25,22 @@ export type TypeEmbedTask = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY'
 // 문서와 질의는 다른 벡터를 만든다. 섞으면 관련·무관의 점수 간격이 좁아진다.
 export const cacheTaskOf = (task: TypeEmbedTask) => (task === 'RETRIEVAL_QUERY' ? 'q' : 'd')
 
+// 질의 임베딩은 Postgres에 남기지 않는다. 문서 임베딩(task = 'd')만 embedding_cache에
+// 영구히 쌓고, 질의(task = 'q')는 core/cache(운영은 레디스, 그 외 메모리)에 짧게 둔다.
+//
+// 이유는 용량이다. embedding_cache에서 지우는 경로가 없는데 질의는 인증 없는 공개
+// 경로에서 들어온다. /posts/search의 전역 한도가 분당 120회이므로 상한까지 두드리면
+// 하루 172,800행이고, vector(1536)은 행당 6,152바이트에 오버헤드가 붙어 하루 약 1GB씩
+// 영원히 늘어난다. 디스크가 차면 Postgres가 멈추고 검색이 아니라 사이트 전체가 죽는다.
+// 한 디스크에 Postgres·레디스·Typesense·Grafana가 같이 사는 상자라 여유도 없다.
+export const QUERY_CACHE_TTL_SECONDS = 600
+
+// 표의 복합 PK(content_hash, model, dims, task)를 그대로 키에 편다. dims와 task를
+// 빼면 차원이나 taskType을 바꾼 뒤에도 옛 벡터가 돌아오고, 그 벡터는 새로 만든
+// 것들과 같은 공간에 있지 않아 검색이 조용히 망가진다.
+export const queryCacheKey = (hash: string, task: TypeEmbedTask) =>
+  `embedding:${EMBEDDING_MODEL}:${EMBEDDING_DIMS}:${cacheTaskOf(task)}:${hash}`
+
 export const computeHash = (text: string) => createHash('sha256').update((text || '').trim()).digest('hex')
 
 // 축소 차원은 사전 정규화가 되어 있지 않다. 안 하면 코사인 거리 연산이 어긋난다.
@@ -34,6 +51,10 @@ export const normalize = (v: number[]): number[] => {
 
 // 임베딩 응답에는 생성 호출과 달리 usageMetadata가 없다. 비용을 세려면 추정해야 한다.
 // 한국어는 대략 1.5자에 1토큰이다. 정확한 값이 아니라 자릿수를 맞추는 용도다.
+//
+// 이 셈으로 200자 질의는 약 134토큰이고, $0.15/1M이면 호출당 약 20마이크로달러
+// ($0.00002)다. 질의 캐시가 아끼는 것은 이 돈이 아니라 지연과 호출 수다 - 캐시를
+// 어디에 둘지는 비용이 아니라 용량으로 정해야 한다(위 QUERY_CACHE_TTL_SECONDS 주석).
 export const estimateTokens = (text: string) => Math.ceil((text || '').length / 1.5)
 
 const vectorLiteral = (v: number[]) => `[${v.join(',')}]`
@@ -51,8 +72,42 @@ const embedding = {
     return (result.embeddings || []).map(e => normalize(e.values || []))
   },
 
+  // 질의 캐시는 최적화일 뿐 진실의 출처가 아니다. 읽기든 쓰기든 레디스가 죽으면
+  // 그냥 API를 치면 된다 - 여기서 던지면 캐시 장애가 검색 장애가 된다.
+  getCachedQuery: async (hashes: string[], task: TypeEmbedTask): Promise<Map<string, number[]>> => {
+    const cache = useCache()
+    const found = new Map<string, number[]>()
+
+    await Promise.all(hashes.map(async hash => {
+      try {
+        const value = await cache.get(queryCacheKey(hash, task))
+        if (Array.isArray(value) && value.length === EMBEDDING_DIMS) found.set(hash, value)
+      } catch (e) {
+        log.error('embedding 질의 캐시 조회 실패', e)
+      }
+    }))
+
+    return found
+  },
+
+  putCachedQuery: async (entries: { hash: string, vector: number[] }[], task: TypeEmbedTask) => {
+    const cache = useCache()
+
+    await Promise.all(entries.map(async ({ hash, vector }) => {
+      try {
+        // 10분이다. 1536 float를 JSON으로 적으면 약 30KB이므로 분당 120회 상한을
+        // 계속 두드려도 10분 창에 약 36MB다. 한 시간으로 늘리면 200MB가 넘는데,
+        // 이미 스왑을 쓰는 상자에서 레디스가 그만큼을 더 쥐고 있으면 안 된다.
+        await cache.set(queryCacheKey(hash, task), vector, QUERY_CACHE_TTL_SECONDS)
+      } catch (e) {
+        log.error('embedding 질의 캐시 적재 실패', e)
+      }
+    }))
+  },
+
   getCached: async (hashes: string[], task: TypeEmbedTask): Promise<Map<string, number[]>> => {
     if (!hashes.length) return new Map()
+    if (task === 'RETRIEVAL_QUERY') return embedding.getCachedQuery(hashes, task)
 
     const rows = await dataSource.query(
       `SELECT content_hash, embedding::text AS embedding FROM embedding_cache
@@ -67,6 +122,8 @@ const embedding = {
   },
 
   putCached: async (entries: { hash: string, vector: number[] }[], task: TypeEmbedTask) => {
+    if (task === 'RETRIEVAL_QUERY') return embedding.putCachedQuery(entries, task)
+
     for (const { hash, vector } of entries) {
       await dataSource.query(
         `INSERT INTO embedding_cache (content_hash, model, dims, task, embedding)
@@ -148,6 +205,24 @@ const embedding = {
     }
 
     return out
+  },
+
+  // 이 변경 전에 쓰인 질의 행을 걷어내는 안전망이다. 지금은 질의가 embedding_cache로
+  // 들어가지 않지만, 이미 쌓인 행은 지우는 경로가 없으면 영원히 남는다. 야간에 한 번
+  // 돈다. 지울 것이 없으면 0행이라 매일 돌아도 무해하다.
+  pruneQueryCache: async () => {
+    try {
+      const rows = await dataSource.query(
+        `WITH deleted AS (DELETE FROM embedding_cache WHERE task = 'q' RETURNING 1)
+         SELECT count(*)::int AS n FROM deleted`,
+      )
+      const deleted = Number((rows[0] || {}).n || 0)
+      if (deleted) log.info(`embedding.pruneQueryCache: ${deleted}행`)
+      return deleted
+    } catch (e) {
+      log.error('embedding.pruneQueryCache 실패', e)
+      return 0
+    }
   },
 }
 

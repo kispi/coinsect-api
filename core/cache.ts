@@ -22,6 +22,14 @@ const localCacheClient: ICacheClient = {
   },
   get: (key: string) => localState[key],
   del: (key: string) => delete localState[key],
+  incr: async (key: string, ttlSeconds: number) => {
+    const next = (Number(localState[key]) || 0) + 1
+    localState[key] = next
+    // 만료는 첫 증가에서만 건다. 증가할 때마다 새로 걸면 계속 두드리는 쪽의 창이
+    // 끝나지 않아 카운터가 영원히 리셋되지 않는다. unref 이유는 set과 같다.
+    if (next === 1 && ttlSeconds) setTimeout(() => localCacheClient.del(key), ttlSeconds * 1000).unref()
+    return next
+  },
   hGetAll: async (key: string) => ({ ...localHash(key) }),
   hSet: async (key: string, field: string, value: unknown) => { localHash(key)[field] = value },
   hSetNX: async (key: string, field: string, value: unknown) => {
@@ -59,6 +67,16 @@ const useCache = (): ICacheClient => {
       return client.set(key, JSON.stringify(value))
     },
     del: (key: string) => client.del(key),
+    // INCR은 키가 없으면 0에서 시작해 원자적으로 올린다. 결과가 1이라는 것은
+    // 이 호출이 키를 만들었다는 뜻이므로 그때만 만료를 건다 - 매번 걸면 창이
+    // 계속 밀려 카운터가 리셋되지 않고, 아예 안 걸면 키가 영원히 남는다.
+    // 값은 JSON.stringify를 거치지 않는다. 레디스가 정수로 다뤄야 하고, 숫자
+    // 리터럴은 get 쪽의 JSON.parse도 그대로 통과한다.
+    incr: async (key: string, ttlSeconds: number) => {
+      const next = await client.incr(key)
+      if (next === 1 && ttlSeconds) await client.expire(key, ttlSeconds)
+      return next
+    },
     // 값은 get/set과 같은 방식으로 JSON을 거친다. 레디스 해시의 값은 문자열뿐이다.
     hGetAll: async (key: string) => {
       const raw = await client.hGetAll(key)

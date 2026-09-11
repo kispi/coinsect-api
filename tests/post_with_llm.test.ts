@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildAnswerPrompt, DAILY_COST_CAP_MICROS } from '../services/post'
+import { buildAnswerPrompt, cappedCostMicros, CAPPED_TASKS, DAILY_COST_CAP_MICROS } from '../services/post'
 
 test('프롬프트에 회수된 조각만 들어간다', () => {
   const prompt = buildAnswerPrompt('반감기가 뭐야', [
@@ -47,4 +47,29 @@ test('content가 빈 발췌만 있으면 null을 돌려준다', () => {
   assert.equal(buildAnswerPrompt('질문', [
     { postId: 1, boardId: 3, content: '', score: null, matchType: 'keyword' },
   ]), null)
+})
+
+test('일일 상한은 공개 엔드포인트의 태스크만 센다', () => {
+  // 캡처 트래픽(position_read)은 하루 3,500회 · 약 $10 규모라, 함께 더하면 UTC
+  // 날짜가 바뀌고 한 시간 안에 $2 상한을 넘겨 with_llm이 하루 종일 답을 못 준다.
+  const rows = [
+    { task: 'position_read', costMicros: 10_000_000 },
+    { task: 'embed_index', costMicros: 500_000 },
+    { task: 'post_answer', costMicros: 300 },
+    { task: 'embed_query', costMicros: 20 },
+  ]
+
+  assert.equal(cappedCostMicros(rows), 320)
+  assert.ok(cappedCostMicros(rows) < DAILY_COST_CAP_MICROS)
+})
+
+test('상한 대상은 post_answer와 embed_query 둘이다', () => {
+  assert.deepEqual([...CAPPED_TASKS].sort(), ['embed_query', 'post_answer'])
+})
+
+test('상한 대상만으로도 한도를 넘으면 잡힌다', () => {
+  // 필터가 상한 자체를 무력화하면 안 된다. 공개 경로가 실제로 태우면 걸려야 한다.
+  const rows = [{ task: 'post_answer', costMicros: DAILY_COST_CAP_MICROS }]
+
+  assert.ok(cappedCostMicros(rows) >= DAILY_COST_CAP_MICROS)
 })

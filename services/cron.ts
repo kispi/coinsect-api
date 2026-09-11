@@ -6,6 +6,7 @@ import marketInfoService from './market_info'
 import dashboardService from './dashboard'
 import aiUsage from './ai_usage'
 import ragIndexer from './rag/indexer'
+import ragEmbedding from './rag/embedding'
 
 const failableCrawl = (minValue: number) => {
   whaleAlertService.crawl(minValue).then().catch(() => {})
@@ -13,9 +14,14 @@ const failableCrawl = (minValue: number) => {
 
 // 어제치를 접고 90일 지난 원본을 지운다. 집계는 덮어쓰기, 정리는 컷오프 DELETE라
 // 여러 번 돌아도 안전하다.
-const rollupAiUsageJob = async () => {
+//
+// 질의 임베딩 캐시 정리도 여기 얹는다. 질의는 이제 Postgres가 아니라 core/cache로
+// 가지만, 그 전에 embedding_cache에 들어간 task = 'q' 행은 지우는 경로가 없으면
+// 영원히 남는다. 하루 한 번 걷어내는 안전망이고, 지울 것이 없으면 아무 일도 없다.
+const nightlyJob = async () => {
   await aiUsage.rollup()
   await aiUsage.prune()
+  await ragEmbedding.pruneQueryCache()
 }
 
 const cronService = {
@@ -50,8 +56,8 @@ const cronService = {
       interval: 1000 * 60,
     })
     cron.addJob({
-      id: 'rollupAiUsage',
-      runnable: rollupAiUsageJob,
+      id: 'nightly',
+      runnable: nightlyJob,
       interval: 1000 * 60 * 60 * 24,
     })
     cron.addJob({
@@ -70,7 +76,7 @@ const cronService = {
     // 그래서 기동 시에도 한 번 던져둔다 - rollup은 덮어쓰기, prune은 컷오프 DELETE라
     // 둘 다 멱등이므로 주기 실행과 겹쳐도 무해하다. 서버 기동을 붙잡으면 안 되므로
     // 기다리지 않는다.
-    rollupAiUsageJob().catch(() => {})
+    nightlyJob().catch(() => {})
     cron.run()
   },
 }

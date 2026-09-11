@@ -2,6 +2,12 @@ interface ICacheClient {
   set: (key: string, value: unknown, seconds?: number) => unknown,
   get: (key: string) => Promise<any>,
   del: (key: string) => unknown,
+  // 값을 1 올리고 올린 뒤의 값을 준다. 처음 만들어질 때만 만료를 건다.
+  //
+  // get으로 읽고 +1 해서 set으로 쓰는 방식은 카운터가 될 수 없다. 두 요청이 같은
+  // 값을 읽고 같은 값을 쓰므로 한 번만 오른다 - 동시에 들어온 요청이 전부 한도를
+  // 통과한다. 속도 제한처럼 '동시에 들어온 것을 세는' 용도에는 원자적 증가가 필요하다.
+  incr: (key: string, ttlSeconds: number) => Promise<number>,
   // 필드 단위로 원자적인 해시 연산.
   //
   // get으로 읽고 고쳐서 set으로 쓰는 사이에는 await 경계가 있어(레디스 왕복) 다른 요청이

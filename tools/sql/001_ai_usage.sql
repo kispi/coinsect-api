@@ -36,3 +36,8 @@ CREATE TABLE IF NOT EXISTS ai_usage_daily (
   cost_micros     bigint NOT NULL DEFAULT 0,
   PRIMARY KEY (day, model, task)
 );
+
+-- CREATE TABLE IF NOT EXISTS는 표가 이미 있으면 안의 컬럼 목록을 보지 않는다.
+-- failures는 이 파일을 한 번 돌린 뒤에 더해진 칸이라, 먼저 돌린 상자에는 표만
+-- 있고 칸이 없다. 그대로 두면 야간 rollup의 upsert가 매번 실패한다. 따로 더한다.
+ALTER TABLE ai_usage_daily ADD COLUMN IF NOT EXISTS failures integer NOT NULL DEFAULT 0;

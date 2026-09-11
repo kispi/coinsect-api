@@ -10,6 +10,7 @@ import IContext from '../core/interfaces/context'
 import orm, { QueryOverrides } from '../core/orm'
 import aiUsage from './ai_usage'
 import ragSearch, { IRetrieved } from './rag/search'
+import { TypeAiTask } from '../entities/ai_usage'
 
 // 떠다니는 별칭(gemini-flash-latest)을 쓰지 않는다. 구글이 별칭을 다음 티어로
 // 옮기면 배포도 하지 않았는데 단가와 응답 성향이 함께 바뀌고, 단가표에 그 이름이
@@ -27,6 +28,25 @@ const ANSWER_MODEL = 'gemini-3.8-flash'
 // 개인 한도가 없는 공개 서비스에서 전역 상한은 마지막 방어선이다. 사람이
 // 깨어나기 전에 서비스가 스스로 멈춰야 한다.
 export const DAILY_COST_CAP_MICROS = Number(process.env.AI_DAILY_COST_CAP_MICROS) || 2_000_000 // $2
+
+// 상한이 묶는 것은 공개 엔드포인트가 쓰는 돈뿐이다. 이 둘만 센다.
+//
+// ai_usage는 서버 전체의 원장이라 캡처 트래픽까지 같은 표에 쌓인다. position_read는
+// 방송인 화면 판독이라 하루 약 3,500회 · 건당 약 $0.003 = 하루 $10 규모다. 전부
+// 더하면 UTC 날짜가 바뀌고 한 시간 안에 $2 상한을 넘기고, 그 뒤로는 하루 종일
+// /posts/with_llm이 answer: null만 돌려준다 - 아무도 남용하지 않았는데 공개
+// 엔드포인트가 매일 꺼지는 것이다. 상한은 그 트래픽을 막으라고 둔 스위치가 아니다.
+//
+// embed_index도 뺀다. 백필과 인덱싱은 한 번 쓰고 마는 비용이고, 그것 때문에 공개
+// 답변이 꺼지면 인과가 없는 장애가 된다. position_read는 판독 쪽 자체 예산으로
+// 따로 봐야 할 몫이다.
+export const CAPPED_TASKS: TypeAiTask[] = ['post_answer', 'embed_query']
+
+// aggregate() 결과에서 상한 대상 태스크만 골라 합친다. 순수 함수로 빼 둔 이유는
+// 이 필터가 빠지는 것이 곧 1번 장애의 재현이라, DB 없이도 검사할 수 있어야 해서다.
+export const cappedCostMicros = (rows: { task: string, costMicros: number }[]) => rows
+  .filter(r => CAPPED_TASKS.includes(r.task as TypeAiTask))
+  .reduce((sum, r) => sum + r.costMicros, 0)
 
 // 회수된 조각으로 답변 프롬프트를 만든다. 회수가 비면 null - 근거 없이 답하게
 // 두면 그럴듯한 거짓말이 나온다.
@@ -155,8 +175,7 @@ const postService = {
       let overDailyCap = false
       try {
         const rows = await aiUsage.aggregate(aiUsage.utcDay())
-        const todayCostMicros = rows.reduce((sum, r) => sum + r.costMicros, 0)
-        overDailyCap = todayCostMicros >= DAILY_COST_CAP_MICROS
+        overDailyCap = cappedCostMicros(rows) >= DAILY_COST_CAP_MICROS
       } catch (e) {
         log.error('allWithLLM: 일일 비용 조회 실패. 상한 검사를 건너뛴다.', e)
       }
