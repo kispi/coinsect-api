@@ -57,6 +57,14 @@ export const chunkText = (text: string, maxChunkSize = 800, overlap = 120): stri
           temp = s
         }
       }
+
+      // 문장 분해로도 못 자르는 덩어리(마침표 없는 한국어 등)는 상한 길이로 강제로 자른다.
+      // 단어 경계를 포기해야 하지만, 조각 크기가 통제되지 않으면 임베딩 품질이 불안정해진다.
+      while (temp && temp.length > maxChunkSize) {
+        chunks.push(temp.slice(0, maxChunkSize))
+        temp = temp.slice(maxChunkSize)
+      }
+
       current = temp
     } else {
       current = p

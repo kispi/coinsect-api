@@ -21,6 +21,7 @@ test('한 리스트에만 있으면 그 순위만큼의 점수를 갖는다', ()
 
   assert.equal(fused[0].item.id, 'a')
   assert.deepEqual(fused[1].sources, [0])
+  assert.equal(fused[1].rrfScore, 1 / (RRF_K + 2))
 })
 
 test('먼저 등장한 리스트의 객체를 유지한다', () => {
@@ -42,4 +43,15 @@ test('동점이면 먼저 등장한 순서를 지킨다', () => {
 
 test('빈 리스트는 빈 결과다', () => {
   assert.deepEqual(fuseRRF([[], []], id), [])
+})
+
+test('같은 리스트 안의 중복 키는 한 번으로만 센다', () => {
+  // 부르는 쪽이 중복을 없애지 않아도 함수가 스스로 첫 등장만 센다.
+  // 리스트 안에 같은 키가 두 번 나오면 점수가 한 번만 더해진다.
+  const fused = fuseRRF([[{ id: 'x' }, { id: 'y' }, { id: 'x' }]], id)
+
+  assert.equal(fused[0].item.id, 'x')
+  // 첫 등장인 position 0만 반영: 1/(60+1)
+  assert.equal(fused[0].rrfScore, 1 / (RRF_K + 1))
+  assert.deepEqual(fused[0].sources, [0])
 })

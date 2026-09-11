@@ -26,7 +26,7 @@ test('한 단락이 상한을 넘으면 문장으로 쪼갠다', () => {
   const chunks = chunkText(para, 100, 0)
 
   assert.ok(chunks.length >= 2)
-  chunks.forEach(chunk => assert.ok(chunk.length <= 120, `조각이 너무 길다: ${chunk.length}`))
+  chunks.forEach(chunk => assert.ok(chunk.length <= 100, `조각이 너무 길다: ${chunk.length}`))
 })
 
 test('겹침이 앞 조각의 꼬리를 다음 조각 머리에 붙인다', () => {
@@ -45,4 +45,27 @@ test('겹침 조각은 단어 중간에서 시작하지 않는다', () => {
   const chunks = chunkText(`aaa bbb ccc ddd\n\neee fff`, 16, 8)
   // 꼬리를 자른 뒤 첫 공백까지를 버려 온전한 경계에서 시작한다.
   assert.ok(!/^\S*\s/.test(chunks[1]) || chunks[1].startsWith('ccc') || chunks[1].startsWith('ddd'))
+})
+
+test('겹침 조각이 공백 없는 한국어일 때 그대로 쓴다', () => {
+  // 한국어는 띄어쓰기가 드물어 꼬리에 공백이 없을 수 있다.
+  // 그 경우 문맥을 잃는 것보다는 자른 그대로 쓴다.
+  const chunks = chunkText('가나다라마바사\n\n아자차카타파하', 10, 5)
+
+  assert.equal(chunks.length, 2)
+  // 첫 조각의 꼬리: '마바사'의 뒤에서 5자 = '라마바사'
+  // 이 중 공백은 없으므로 그대로 둘째 조각 머리에 붙는다
+  assert.ok(chunks[1].startsWith('라마바사') || chunks[1].includes('아자차카타파하'))
+})
+
+test('문장부호 없는 긴 한국어 텍스트는 상한 길이로 강제로 자른다', () => {
+  // 마침표 없는 한국어는 문장 분해로 못 자르므로, 상한을 초과하면
+  // 단어 경계를 포기하고 정확히 상한 길이로 자른다.
+  const longKorean = '가나다라마바사아자차카타파하가나다라마바사아자차카타파하'
+  const chunks = chunkText(longKorean, 20, 0)
+
+  assert.ok(chunks.length >= 2)
+  chunks.forEach(chunk => assert.ok(chunk.length <= 20, `조각이 상한을 넘는다: ${chunk.length}`))
+  // 원문을 모두 포함해야 한다
+  assert.equal(chunks.join(''), longKorean)
 })
