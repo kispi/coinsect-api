@@ -1,4 +1,5 @@
 import { AiUsage, TypeAiTask } from '../entities/ai_usage'
+import { AiUsageDaily } from '../entities/ai_usage_daily'
 import { costOf } from './content/model_usage'
 import { dataSource } from '../database'
 import { log } from '../core/logger'
@@ -51,6 +52,76 @@ const aiUsage = {
       })
     } catch (e) {
       log.error('aiUsage.record 실패', e)
+    }
+  },
+
+  // UTC 'YYYY-MM-DD'. 서버 로케일에 흔들리면 집계 경계가 날마다 달라진다.
+  utcDay: (offsetDays = 0) => {
+    const d = new Date(Date.now() + offsetDays * 24 * 60 * 60 * 1000)
+    return d.toISOString().slice(0, 10)
+  },
+
+  // 하루치 원본을 (모델, 태스크)로 접는다. DB를 타는 지점.
+  aggregate: async (day: string) => {
+    const rows = await dataSource.getRepository(AiUsage)
+      .createQueryBuilder('u')
+      .select('u.model', 'model')
+      .addSelect('u.task', 'task')
+      .addSelect('count(*)', 'requests')
+      .addSelect('sum(u.input_tokens)', 'tokensIn')
+      .addSelect('sum(u.output_tokens)', 'tokensOut')
+      .addSelect('sum(u.thinking_tokens)', 'tokensThinking')
+      .addSelect('sum(u.cost_micros)', 'costMicros')
+      .where(`u.created_at >= :day::date AND u.created_at < (:day::date + interval '1 day')`, { day })
+      .groupBy('u.model')
+      .addGroupBy('u.task')
+      .getRawMany()
+
+    // pg 드라이버는 bigint와 count(*)를 문자열로 돌려준다. 숫자로 못 박아 둔다.
+    return rows.map(r => ({
+      day,
+      model: r.model,
+      task: r.task,
+      requests: Number(r.requests),
+      tokensIn: Number(r.tokensIn),
+      tokensOut: Number(r.tokensOut),
+      tokensThinking: Number(r.tokensThinking),
+      costMicros: Number(r.costMicros),
+    }))
+  },
+
+  // 덮어쓴다. 더하지 않는다 - 같은 날을 두 번 집계해도 값이 두 배가 되면 안 된다.
+  upsertDaily: async (rows: Partial<AiUsageDaily>[]) => {
+    if (!rows.length) return
+    await dataSource.getRepository(AiUsageDaily)
+      .upsert(rows, { conflictPaths: ['day', 'model', 'task'], skipUpdateIfNoValuesChanged: false })
+  },
+
+  rollup: async (day?: string) => {
+    const target = day || aiUsage.utcDay(-1)
+    try {
+      const rows = await aiUsage.aggregate(target)
+      await aiUsage.upsertDaily(rows)
+      log.info(`aiUsage.rollup: ${target} — ${rows.length}행`)
+      return rows.length
+    } catch (e) {
+      log.error('aiUsage.rollup 실패', e)
+      return 0
+    }
+  },
+
+  // 90일 지난 원본을 지운다. 그 이전 기간은 daily가 답한다.
+  prune: async (days = 90) => {
+    try {
+      const result = await dataSource.getRepository(AiUsage)
+        .createQueryBuilder()
+        .delete()
+        .where(`created_at < now() - (:days || ' days')::interval`, { days })
+        .execute()
+      return result.affected || 0
+    } catch (e) {
+      log.error('aiUsage.prune 실패', e)
+      return 0
     }
   },
 }

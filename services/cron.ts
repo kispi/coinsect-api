@@ -4,6 +4,7 @@ import chatService from './chat'
 import whaleAlertService from './onchain/whale_alert'
 import marketInfoService from './market_info'
 import dashboardService from './dashboard'
+import aiUsage from './ai_usage'
 
 const failableCrawl = (minValue: number) => {
   whaleAlertService.crawl(minValue).then().catch(() => {})
@@ -39,6 +40,15 @@ const cronService = {
         dashboardService.main(true)
       },
       interval: 1000 * 60,
+    })
+    cron.addJob({
+      id: 'rollupAiUsage',
+      // 어제치를 접고 90일 지난 원본을 지운다. 집계는 덮어쓰기라 여러 번 돌아도 안전하다.
+      runnable: async () => {
+        await aiUsage.rollup()
+        await aiUsage.prune()
+      },
+      interval: 1000 * 60 * 60 * 24,
     })
     cron.run()
   },

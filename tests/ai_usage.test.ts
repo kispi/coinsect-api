@@ -74,3 +74,35 @@ test('토큰을 직접 넘기면 usageMetadata 없이도 적는다', async () =>
   // (2e6/1e6)*0.15 = 0.3 USD = 300000 micros
   assert.equal(rows[0].costMicros, 300_000)
 })
+
+test('집계는 같은 날을 두 번 돌려도 값이 두 배가 되지 않는다', async () => {
+  // cron은 프로세스 시작 시각 기준이라 재배포가 잦으면 같은 날을 여러 번 집계한다.
+  // 더하지 않고 덮어써야 하는 이유다.
+  const upserted = []
+  const originalAgg = aiUsage.aggregate
+  const originalUpsert = aiUsage.upsertDaily
+  aiUsage.aggregate = (async () => ([
+    { day: '2026-09-10', model: 'gemini-3.8-flash', task: 'position_read', requests: 12, tokensIn: 100, tokensOut: 20, tokensThinking: 5, costMicros: 3000 },
+  ])) as never
+  aiUsage.upsertDaily = (async rows => { upserted.push(...rows) }) as never
+
+  try {
+    await aiUsage.rollup('2026-09-10')
+    await aiUsage.rollup('2026-09-10')
+  } finally {
+    aiUsage.aggregate = originalAgg
+    aiUsage.upsertDaily = originalUpsert
+  }
+
+  // 두 번 올라갔지만 값은 같다. 합산이 아니라 덮어쓰기여야 한다.
+  assert.equal(upserted.length, 2)
+  assert.deepEqual(upserted[0], upserted[1])
+  assert.equal(upserted[0].requests, 12)
+})
+
+test('utcDay는 서버 로케일과 무관하게 UTC 날짜를 준다', () => {
+  assert.match(aiUsage.utcDay(), /^\d{4}-\d{2}-\d{2}$/)
+  const today = new Date(aiUsage.utcDay())
+  const yesterday = new Date(aiUsage.utcDay(-1))
+  assert.equal((today.getTime() - yesterday.getTime()) / (1000 * 60 * 60 * 24), 1)
+})
