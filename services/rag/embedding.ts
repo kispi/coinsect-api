@@ -15,10 +15,10 @@ export const EMBEDDING_DIMS = 1536
 // 한 요청에 묶어 보낼 청크 수. embedContent의 contents는 배열을 받고 embeddings를
 // 넣은 순서 그대로 돌려준다. 하나씩 치면 6,000청크가 6,000요청이다.
 //
-// 이 값은 모델마다 다른 상한에 걸릴 수 있다. 400이 나면 줄일 것.
-// 2026-09-11: API 키가 없는 환경이라 실제 호출로 상한을 확인하지 못했다. 32는
-// 검증되지 않은 값이다 - 백필을 돌리기 전에 반드시 실제 호출로 확인할 것.
-export const EMBED_BATCH_SIZE = 32
+// 2026-09-11 프로덕션에서 실제 키로 측정했다. 32와 100은 성공하고 250은 400으로
+// 거부된다: "BatchEmbedContentsRequest.requests: at most 100 requests can be in one
+// batch". 그래서 상한 그대로인 100을 쓴다. 모델을 바꾸면 이 숫자도 다시 재야 한다.
+export const EMBED_BATCH_SIZE = 100
 
 export type TypeEmbedTask = 'RETRIEVAL_DOCUMENT' | 'RETRIEVAL_QUERY'
 
