@@ -5,6 +5,7 @@ import orm from '../core/orm'
 import helpers from '../core/helpers'
 import postService from '../services/post'
 import ragIndexer from '../services/rag/indexer'
+import { log } from '../core/logger'
 
 // 자유게시판 id
 const freeBoardId = 1
@@ -49,9 +50,16 @@ const postController = {
 
       // 등록하고 그 자리에서 배수를 깨운다. 기다리지 않는다 - 글쓰기가 임베딩을
       // 기다릴 이유가 없고, 실패해도 훑기가 5분 안에 잡는다.
+      //
+      // drain()은 enqueue와 달리 자기 오류를 삼키지 않는다(락 획득이나 잡 조회가
+      // 죽으면 그대로 던진다). void로 던져둔 프라미스가 거부되면 unhandled
+      // rejection이 되어 Node가 프로세스를 내리므로, 글 하나 쓰는 요청이 서버
+      // 전체를 죽이는 일이 없도록 여기서 반드시 받아 삼킨다. 응답은 이미 나갔다.
       const postId = ((inserted.identifiers || [])[0] || {}).id
       if (postId) {
-        void ragIndexer.enqueue(postId).then(() => ragIndexer.drain())
+        void ragIndexer.enqueue(postId)
+          .then(() => ragIndexer.drain())
+          .catch(e => log.error('인덱싱 배수 실패', e))
       }
     } catch (e) {
       c.res.failed(e)
@@ -106,7 +114,10 @@ const postController = {
       target.lastEdit = new Date()
       await Post.save(target)
       c.res.success()
-      void ragIndexer.enqueue(target.id).then(() => ragIndexer.drain())
+      // create와 같은 이유로 drain()의 거부를 여기서 받아 삼킨다.
+      void ragIndexer.enqueue(target.id)
+        .then(() => ragIndexer.drain())
+        .catch(e => log.error('인덱싱 배수 실패', e))
     } catch (e) {
       c.res.failed(e)
     }

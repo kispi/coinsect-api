@@ -15,6 +15,7 @@ import { Wallet } from '../entities/wallet'
 import { WhaleAlert } from '../entities/whale_alert'
 import { useCRUD } from '../core/controller'
 import IContext from '../core/interfaces/context'
+import { dataSource } from '../database'
 import useService from '../services'
 import store from '../store'
 import orm, { joinIfAbsent } from '../core/orm'
@@ -123,7 +124,15 @@ const genericDelete = routesPost.delete
 routesPost.delete = async (c: IContext) => {
   const id = Number(c.req.params['id'])
   await genericDelete(c)
-  if (id) void ragIndexer.removeChunks(id)
+  if (!id) return
+
+  // genericDelete(useCRUD의 delete)는 실패해도 오류를 안에서 삼키고 c.res.failed만
+  // 부를 뿐 되던지지 않는다. 그래서 여기까지 항상 정상적으로 도착하고, 그걸
+  // "지워졌다"는 신호로 쓸 수 없다. 삭제가 실제로 반영됐는지 deletedAt으로 다시
+  // 확인한 뒤에만 청크를 걷는다 - 안 그러면 삭제가 실패해도 살아 있는 글의 청크가
+  // 사라져, 다음 훑기(최대 5분)까지 그 글이 검색에서 조용히 빠진다.
+  const target = await dataSource.getRepository(Post).findOne({ where: { id }, withDeleted: true })
+  if (target?.deletedAt) void ragIndexer.removeChunks(id)
 }
 
 const routesUser = useCRUD({ model: User, useSoftDelete: true, withDeleted: true })
