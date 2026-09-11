@@ -141,7 +141,7 @@ const indexer = {
   },
 
   // 잡 하나를 처리한다.
-  runJob: async (job: { id: number, post_id: number, attempts: number }) => {
+  runJob: async (job: { id: number, post_id: number, attempts: number, content_hash: string | null }) => {
     const [post] = await indexer.query(
       'SELECT id, board_id, title, content FROM posts WHERE id = $1 AND deleted_at IS NULL',
       [job.post_id],
@@ -155,6 +155,35 @@ const indexer = {
     // 제목을 본문 앞에 붙여 임베딩한다. 자유게시판 글은 짧아 본문만으로는 무엇에
     // 관한 글인지 모르는 경우가 많고, 제목이 그 글에서 가장 압축된 주제 신호다.
     const source = `${post.title || ''}\n\n${post.content || ''}`
+    const newHash = computeHash(source)
+
+    // 조회수가 오를 때마다 posts.updated_at도 올라간다(TypeORM 쿼리빌더의 update가
+    // @UpdateDateColumn을 자동으로 건드린다). 그래서 내용이 그대로인 인기 글도 훑기가
+    // 5분마다 다시 잡는다. 임베딩 캐시 덕에 API 비용은 안 나가지만, 청킹·해시 계산과
+    // replaceChunks의 DELETE/UPSERT가 조회수 많은 글 수만큼 매 주기 돈다 - 2 vCPU에
+    // 스왑까지 쓰는 상자에서 공짜가 아니다.
+    //
+    // 해시가 같다고 곧바로 건너뛰면 안 된다. 임베딩이 전부 실패해 던진 뒤 재시도로
+    // 들어온 잡은 해시는 이전과 같아도(글은 안 바뀌었으니까) 청크가 없거나 벡터가
+    // 비어 있다. 그때 건너뛰면 그 글은 영원히 인덱싱되지 않고 조용히 검색에서
+    // 빠진다. 그래서 청크가 실제로 있고 전부 벡터가 채워져 있을 때만 건너뛴다.
+    if (job.content_hash && job.content_hash === newHash) {
+      const [state] = await indexer.query(
+        `SELECT count(*)::int AS total, (count(*) FILTER (WHERE embedding IS NULL))::int AS missing
+         FROM post_chunks WHERE post_id = $1`,
+        [post.id],
+      )
+
+      if (state && Number(state.total) > 0 && Number(state.missing) === 0) {
+        await indexer.query(
+          `UPDATE embedding_jobs SET status = 'done', indexed_at = now(),
+           last_error = NULL, failed_at = NULL, updated_at = now() WHERE id = $1`,
+          [job.id],
+        )
+        return
+      }
+    }
+
     const chunks = chunkText(source)
     const vectors = await embedding.embed(chunks, 'RETRIEVAL_DOCUMENT', 'embed_index')
 
@@ -185,14 +214,14 @@ const indexer = {
     await indexer.query(
       `UPDATE embedding_jobs SET status = 'done', content_hash = $2, indexed_at = now(),
        last_error = NULL, failed_at = NULL, updated_at = now() WHERE id = $1`,
-      [job.id, computeHash(source)],
+      [job.id, newHash],
     )
   },
 
   drain: async (limit = 20) => {
     const ran = await indexer.withLock(async () => {
       const jobs = await indexer.query(
-        `SELECT id, post_id, attempts FROM embedding_jobs
+        `SELECT id, post_id, attempts, content_hash FROM embedding_jobs
          WHERE status = 'pending' AND attempts < $2
          ORDER BY created_at ASC LIMIT $1`,
         [limit, MAX_ATTEMPTS],

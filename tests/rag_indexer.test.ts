@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import indexer from '../services/rag/indexer'
-import embedding from '../services/rag/embedding'
+import embedding, { computeHash } from '../services/rag/embedding'
 import useCache from '../core/cache'
 
 const cache = useCache()
@@ -169,8 +169,8 @@ test('drain이 실패 시각을 앱 시계가 아니라 DB의 now()로 찍는다
 
   indexer.query = (async (text: string, params?: unknown[]) => {
     sql.push(text)
-    if (/^SELECT id, post_id, attempts FROM embedding_jobs/.test(text)) {
-      return [{ id: 1, post_id: 7, attempts: 4 }]
+    if (/^SELECT id, post_id, attempts, content_hash FROM embedding_jobs/.test(text)) {
+      return [{ id: 1, post_id: 7, attempts: 4, content_hash: null }]
     }
     return []
   }) as never
@@ -208,7 +208,7 @@ test('임베딩이 전부 실패하면 done으로 찍지 않고 던진다', asyn
   embedding.embed = (async (texts: string[]) => texts.map(() => null)) as never
 
   try {
-    await assert.rejects(() => indexer.runJob({ id: 1, post_id: 7, attempts: 0 }))
+    await assert.rejects(() => indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: null }))
   } finally {
     indexer.query = originalQuery
     embedding.embed = originalEmbed
@@ -232,11 +232,79 @@ test('임베딩이 일부만 실패하면 나머지로 done을 찍는다', async
   embedding.embed = (async (texts: string[]) => texts.map((_, i) => (i === 0 ? [0.1] : null))) as never
 
   try {
-    await indexer.runJob({ id: 1, post_id: 7, attempts: 0 })
+    await indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: null })
   } finally {
     indexer.query = originalQuery
     embedding.embed = originalEmbed
   }
 
   assert.ok(calls.some(s => /UPDATE embedding_jobs SET status = 'done'/.test(s)))
+})
+
+test('내용이 안 바뀌었고 청크가 멀쩡하면 다시 인덱싱하지 않는다', async () => {
+  // 조회수만 올라도 posts.updated_at이 갱신돼 훑기가 이 잡을 다시 집는다.
+  // 해시가 그대로면 청킹·임베딩·replaceChunks를 전부 건너뛰어야 한다.
+  const source = '제목\n\n내용'
+  const hash = computeHash(source)
+  const originalQuery = indexer.query
+  const originalReplaceChunks = indexer.replaceChunks
+  const replaceCalls: unknown[] = []
+  const sql: string[] = []
+
+  indexer.query = (async (text: string) => {
+    sql.push(text)
+    if (/^SELECT id, board_id, title, content FROM posts/.test(text)) {
+      return [{ id: 7, board_id: 1, title: '제목', content: '내용' }]
+    }
+    if (/count\(\*\)/.test(text)) {
+      // 청크 2개가 이미 있고 전부 벡터가 채워져 있다.
+      return [{ total: 2, missing: 0 }]
+    }
+    return []
+  }) as never
+  indexer.replaceChunks = (async (...args: unknown[]) => { replaceCalls.push(args) }) as never
+
+  try {
+    await indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: hash })
+  } finally {
+    indexer.query = originalQuery
+    indexer.replaceChunks = originalReplaceChunks
+  }
+
+  assert.equal(replaceCalls.length, 0, '내용이 안 바뀌었으면 청크를 다시 쓰면 안 된다')
+  assert.ok(sql.some(s => /UPDATE embedding_jobs SET status = 'done'/.test(s)), 'indexed_at은 그래도 갱신해야 훑기가 다시 안 집는다')
+})
+
+test('해시가 같아도 청크가 비어 있으면 다시 인덱싱한다', async () => {
+  // 임베딩이 전부 실패해 던진 뒤 재시도로 들어온 잡은 해시는 그대로여도 청크가
+  // 없거나 벡터가 비어 있다. 여기서 건너뛰면 그 글은 영원히 검색에서 빠진다.
+  const source = '제목\n\n내용'
+  const hash = computeHash(source)
+  const originalQuery = indexer.query
+  const originalEmbed = embedding.embed
+  const originalReplaceChunks = indexer.replaceChunks
+  const replaceCalls: unknown[] = []
+
+  indexer.query = (async (text: string) => {
+    if (/^SELECT id, board_id, title, content FROM posts/.test(text)) {
+      return [{ id: 7, board_id: 1, title: '제목', content: '내용' }]
+    }
+    if (/count\(\*\)/.test(text)) {
+      // 청크가 아예 없다(임베딩이 전부 실패해 저장 전에 던졌던 상황).
+      return [{ total: 0, missing: 0 }]
+    }
+    return []
+  }) as never
+  embedding.embed = (async (texts: string[]) => texts.map(() => [0.1])) as never
+  indexer.replaceChunks = (async (...args: unknown[]) => { replaceCalls.push(args) }) as never
+
+  try {
+    await indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: hash })
+  } finally {
+    indexer.query = originalQuery
+    embedding.embed = originalEmbed
+    indexer.replaceChunks = originalReplaceChunks
+  }
+
+  assert.equal(replaceCalls.length, 1, '청크가 비어 있으면 해시가 같아도 다시 인덱싱해야 한다')
 })
