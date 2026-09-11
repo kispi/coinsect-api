@@ -222,8 +222,9 @@ CREATE INDEX post_chunks_embedding_hnsw_idx ON post_chunks USING hnsw (embedding
 id            serial      PK
 created_at    timestamptz
 updated_at    timestamptz
-post_id       integer     not null
-content_hash  varchar(64)
+post_id       integer     not null UNIQUE
+content_hash  varchar(64)              -- 마지막으로 인덱싱한 내용의 해시
+indexed_at    timestamptz              -- 마지막으로 인덱싱을 끝낸 시각
 status        varchar(20) not null default 'pending'   -- pending|running|done|failed
 attempts      integer     not null default 0
 last_error    text
@@ -232,8 +233,13 @@ locked_by     varchar(100)
 ```
 
 ```sql
+CREATE UNIQUE INDEX embedding_jobs_post_unq ON embedding_jobs (post_id);
 CREATE INDEX embedding_jobs_status_idx ON embedding_jobs (status, created_at);
 ```
+
+**글 하나에 행 하나가 영구히 남는다.** 큐처럼 처리하고 지우지 않는다. 지우면 "이 글을
+이미 인덱싱했는가"를 물을 곳이 없어지고, 5.4의 훑기가 매번 전부를 다시 인덱싱한다.
+행 수는 글 수만큼(현재 1,713)이라 무시해도 되는 크기다.
 
 `locked_at`/`locked_by`는 지금 당장은 필요 없다. API가 단일 프로세스이기 때문이다.
 그래도 넣는 이유는 이 칸이 없으면 프로세스를 나누는 순간 같은 잡을 둘이 잡아 임베딩
@@ -302,11 +308,35 @@ PostgreSQL 기본 전문검색은 한국어에서 무력하다. 조사와 어미
 
 ### 5.4 인덱싱 파이프라인
 
-**등록.** `post_controller`의 `create`/`update`/`delete` 셋에서 부른다. 별도 subscriber를
-두지 않는다. 이 레포에는 subscriber가 하나도 없고, 세 자리를 눈으로 보는 편이 낫다.
+**무엇이 인덱싱 대상인지는 훑어서 안다.** 글은 공개 컨트롤러(`post_controller`)와 어드민
+CRUD(`admin_controller`의 `routesPost`) 양쪽에서 만들어지고 고쳐진다. 게다가 어드민 쪽은
+`useCRUD`가 만든 제네릭 경로라 글만을 위한 자리가 아니다. **쓰기 경로마다 등록을 붙이는
+설계는 하나를 빠뜨리는 순간 그 글이 영원히 인덱싱되지 않는다.** 그리고 빠뜨린 것을
+알아챌 방법이 없다 — 검색이 조용히 그 글만 모른다.
 
-- create/update → `enqueue(postId)`. 같은 글의 pending 잡이 있으면 해시만 갱신한다.
-- delete → 청크를 **즉시 하드 삭제**하고 pending 잡도 지운다.
+그래서 정합성의 근거를 훑기에 둔다.
+
+```sql
+-- 인덱싱이 필요한 글: 잡이 없거나, 글이 마지막 인덱싱 뒤에 바뀌었다
+SELECT p.id FROM posts p
+LEFT JOIN embedding_jobs j ON j.post_id = p.id
+WHERE p.deleted_at IS NULL
+  AND p.board_id = ANY($1)
+  AND (j.id IS NULL OR j.indexed_at IS NULL OR p.updated_at > j.indexed_at)
+```
+
+`posts.updated_at`은 `@UpdateDateColumn`이라 어느 경로로 고쳐도 TypeORM이 올려준다.
+공개 경로의 `Post.save`, 어드민의 `Post.save`, 쿼리빌더 `insert()`/`update()`가 전부 그렇다.
+**어느 쓰기 경로도 이 훑기를 피할 수 없다.**
+
+**등록은 지연을 줄이는 최적화일 뿐이다.** 공개 `post_controller`의 `create`와 `update`에서
+`enqueue(postId)`를 부른다. 자유게시판은 쓴 사람이 곧바로 검색할 수 있는 자리라서다.
+어드민에서 쓰는 블로그 글은 등록 없이 훑기에 맡긴다 — 한 주기(5분) 안에 잡힌다.
+**등록을 빠뜨려도 결과가 달라지지 않고 늦어질 뿐이라는 것이 이 구조의 요점이다.**
+
+**삭제.** `post_controller.delete`와 어드민 삭제에서 청크를 즉시 하드 삭제한다.
+여기만은 훑기로 대신할 수 없다 — 지워진 글이 검색에 남아 있는 시간을 만들면 안 된다.
+훑기도 마지막 방어선으로 지워진 글의 청크를 함께 걷어낸다.
 
 **삭제를 미루지 않는 이유.** 검색에 잡히는데 눌러보면 없는 글로 가는 유령 결과가
 생긴다. 벡터 행이 용량의 대부분이기도 하다. 소프트 삭제(`deleted_at`)여도 청크는 지운다.
@@ -342,8 +372,10 @@ cron만 두면 방금 쓴 글이 최대 한 주기 동안 벡터 경로에 없�
    확인한다** — 모델마다 다르고 문서 기억으로 정할 값이 아니다. 거부당하면 줄인다.
 5. 청크를 `(post_id, chunk_index)` 기준으로 upsert하고, **새 청크 수보다 큰 index의 옛
    청크를 지운다.** 글이 짧아졌을 때 꼬리가 남는 것을 막는다.
-6. `done`으로 표시한다. 실패하면 `attempts`를 올리고 `last_error`를 적는다.
-   5회를 넘으면 `failed`로 두고 더 시도하지 않는다. 조용히 무한 재시도하면 API 비용만 태운다.
+6. `status = done`, `content_hash`와 `indexed_at`을 적는다. **내용이 안 바뀌어 임베딩을
+   한 번도 치지 않았어도 `indexed_at`은 갱신한다.** 안 그러면 훑기가 같은 글을 영원히
+   다시 집는다. 실패하면 `attempts`를 올리고 `last_error`를 적는다. 5회를 넘으면
+   `failed`로 두고 더 시도하지 않는다. 조용히 무한 재시도하면 API 비용만 태운다.
 
 **백필.** `tools/backfill_post_embeddings.ts`가 대상 보드의 전 글을 잡으로 등록하고,
 **자기가 배수를 반복해 돈다.** cron에 맡기면 5분에 20건이라 1,713건에 일곱 시간이 걸리는데,
