@@ -11,29 +11,35 @@ import { rateLimit } from '../core/rate_limit'
 // 자유게시판 id
 const freeBoardId = 1
 
-// 글쓰기와 수정에 거는 속도 제한. 건 하나가 곧바로 인덱싱(청킹 + 임베딩)을 깨우므로
-// 이 경로는 인증 없이 비용을 만드는 자리다.
+// 글쓰기와 수정의 IP 층. 입구에서 건다. 요청을 실제로 거절하는 것은 이 층뿐이다.
 //
-// search/with_llm과 같은 두 층이다. IP 층은 trustProxy 때문에 X-Forwarded-For로
-// 위조되니(2026-09-10 프로덕션 확인, services/content/desktop_jobs.ts) 실질 방어선은
-// 전역 바구니다.
+// trustProxy 때문에 c.req.ip는 X-Forwarded-For로 위조된다(2026-09-10 프로덕션 확인,
+// services/content/desktop_jobs.ts). 그래서 이 층은 실수로 두드리는 경우를 거르는
+// 보조 층일 뿐이고, 비용의 방어선은 아래 mayIndexNow다.
 //
-// 쓰기와 수정이 한 바구니를 쓴다. 둘이 만드는 비용이 같은데 바구니를 나누면 같은
-// 사람이 두 배를 쓸 수 있다.
-//
-// 전역 분당 10회는 이 게시판의 실사용과 비교하면 한참 위다. 자유게시판에 지금까지
-// 쌓인 글이 모두 합쳐 1,630건인데, 분당 10건이면 하루 14,400건이다. 정상 사용자가
-// 닿을 수 없는 선이다. IP당 5회는 오타를 고치느라 연달아 저장하는 사람도 걸리지
-// 않을 만큼 두되(12초에 한 번), 자동화는 거른다.
-export const writeRateLimited = async (c: IContext) => {
-  if (!await rateLimit(`write:${c.req.ip}`, 5, 60)) return true
+// 분당 5회(12초에 한 번)는 오타를 고치느라 연달아 저장하는 사람도 걸리지 않는 선이다.
+export const writeIpRateLimited = async (c: IContext) => !await rateLimit(`write:${c.req.ip}`, 5, 60)
 
-  if (!await rateLimit('write:global', 10, 60)) {
-    // 여기 걸리면 헤더 위조로 IP 층을 우회한 폭주일 가능성이 높다. 사람이 알아채야 한다.
-    log.warn('post write: 전역 속도 제한 도달. IP 층 우회 가능성', { ip: c.req.ip })
-    return true
-  }
+// 즉시 인덱싱의 전역 예산. 저장이 끝난 뒤, 배수를 깨우기 직전에만 소모한다.
+//
+// 이 자리인 이유가 중요하다. 전역 바구니를 요청 입구에서 쓰면 비밀번호를 모르는
+// 사람이 틀린 수정 요청 몇 건으로 게시판 전체의 글쓰기를 잠글 수 있다 - 공격자
+// 비용은 0이고 IP 위조로 IP 층도 피한다. 비용을 막으려다 가용성 구멍을 내는 셈이다.
+// 소유권과 비밀번호 검사를 통과하고 실제로 저장까지 끝나 진짜로 인덱싱을 일으키는
+// 요청만 전역 예산을 쓴다.
+//
+// 걸려도 요청을 거절하지 않는다. 글은 이미 저장됐다. 즉시 배수만 건너뛰면 5분 주기
+// 훑기가 그 글을 집는다. 사용자는 아무것도 잃지 않고 인덱싱만 조금 늦어진다.
+//
+// 분당 5회다. 본문 상한 2만 자에서 글 하나가 약 $0.0023이므로, 즉시 배수로 나가는
+// 돈이 이 층에서 묶인다. globalKey를 인자로 둔 것은 테스트가 서로의 바구니를
+// 오염시키지 않게 하려는 것이다 - IP를 바꿔도 전역 바구니는 하나뿐이라 키를 갈 수
+// 있어야 각 검사가 의도한 것을 잰다.
+export const mayIndexNow = async (ip: string, globalKey = 'write:global') => {
+  if (await rateLimit(globalKey, 5, 60)) return true
 
+  // 여기 걸리면 헤더 위조로 IP 층을 우회한 폭주일 가능성이 높다. 사람이 알아채야 한다.
+  log.warn('post write: 즉시 인덱싱 전역 한도 도달. 훑기에 맡긴다', { ip })
   return false
 }
 
@@ -49,7 +55,7 @@ const postController = {
 
     // 막을 때는 다른 실패 경로와 같은 모양으로 돌려준다. 프론트가 아는 형태여야
     // 사용자가 쓴 글을 잃지 않고 다시 시도할 수 있다.
-    if (await writeRateLimited(c)) return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
+    if (await writeIpRateLimited(c)) return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
 
     const payload = c.req.body
     // if (!payload['board']) payload['board'] = { id : freeBoardId }
@@ -88,8 +94,10 @@ const postController = {
       // 전체를 죽이는 일이 없도록 여기서 반드시 받아 삼킨다. 응답은 이미 나갔다.
       const postId = ((inserted.identifiers || [])[0] || {}).id
       if (postId) {
+        // 잡 등록은 예산과 무관하게 항상 한다. 등록은 행 하나라 공짜이고, 등록해 두면
+        // 즉시 배수를 건너뛰어도 훑기가 다음 주기에 집는다.
         void ragIndexer.enqueue(postId)
-          .then(() => ragIndexer.drain())
+          .then(async () => { if (await mayIndexNow(c.req.ip)) await ragIndexer.drain() })
           .catch(e => log.error('인덱싱 배수 실패', e))
       }
     } catch (e) {
@@ -102,7 +110,7 @@ const postController = {
       return
     }
 
-    if (await writeRateLimited(c)) return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
+    if (await writeIpRateLimited(c)) return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
 
     const payload = c.req.body
 
@@ -147,9 +155,11 @@ const postController = {
       target.lastEdit = new Date()
       await Post.save(target)
       c.res.success()
-      // create와 같은 이유로 drain()의 거부를 여기서 받아 삼킨다.
+      // create와 같은 이유로 drain()의 거부를 여기서 받아 삼킨다. 전역 예산도 create와
+      // 같은 자리에서, 같은 바구니로 쓴다 - 쓰기와 수정이 만드는 인덱싱 비용이 같은데
+      // 바구니를 나누면 같은 사람이 두 배를 쓸 수 있다.
       void ragIndexer.enqueue(target.id)
-        .then(() => ragIndexer.drain())
+        .then(async () => { if (await mayIndexNow(c.req.ip)) await ragIndexer.drain() })
         .catch(e => log.error('인덱싱 배수 실패', e))
     } catch (e) {
       c.res.failed(e)
