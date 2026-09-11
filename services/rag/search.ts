@@ -1,4 +1,5 @@
 import { dataSource } from '../../database'
+import { log } from '../../core/logger'
 import embedding from './embedding'
 import keyword, { IKeywordHit } from './keyword'
 import { fuseRRF } from './fusion'
@@ -76,13 +77,25 @@ const search = {
     const depth = Math.max(limit * 3, 30)
 
     // 키워드 검색은 임베딩을 기다릴 이유가 없다. 둘을 병렬로 돌려 지연을 겹친다.
+    //
+    // 두 경로는 각자 자신의 실패를 잡는다. Promise.all은 하나라도 던지면 통째로
+    // reject하므로, 여기서 안 잡으면 벡터 SQL의 타임아웃 하나가 이미 돌아온
+    // 키워드 결과까지 물귀신처럼 끌고 내려가 검색 전체가 500으로 죽는다.
+    // "장애로 벡터를 포기해도 검색이 통째로 죽으면 안 된다"는 계약은 임베딩
+    // 실패(embed가 null을 줌)뿐 아니라 SQL 자체의 예외에도 지켜져야 한다.
     const [vectorHits, keywordHits] = await Promise.all([
       (async (): Promise<IVectorHit[]> => {
         const [vector] = await embedding.embed([trimmed], 'RETRIEVAL_QUERY', 'embed_query')
         if (!vector || !vector.length) return []
         return search.vectorSearch(vector, boardId || null, minScore, depth)
-      })(),
-      keyword.search(trimmed, boardId || null, depth),
+      })().catch(e => {
+        log.error('하이브리드 검색: 벡터 경로 실패', e)
+        return []
+      }),
+      keyword.search(trimmed, boardId || null, depth).catch(e => {
+        log.error('하이브리드 검색: 키워드 경로 실패', e)
+        return []
+      }),
     ])
 
     // 융합 전에 글 단위로 접는다. RRF는 리스트당 한 항목이 한 번 등장한다고

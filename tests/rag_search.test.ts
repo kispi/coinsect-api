@@ -68,6 +68,43 @@ test('임베딩이 실패해도 키워드 결과는 나온다', async () => {
   assert.equal(result[0]['matchType'], 'keyword')
 })
 
+test('벡터 SQL이 던져도 키워드 결과는 나온다', async () => {
+  // embed가 null을 주는 부드러운 실패 말고, vectorSearch 자체가 타임아웃이나
+  // 연결 오류로 던지는 경우다. Promise.all에 각자 catch가 없으면 이미 돌아온
+  // 키워드 결과까지 함께 버려진다.
+  const originals = { embed: embedding.embed, vec: search.vectorSearch, kw: keyword.search }
+  embedding.embed = (async () => [[0.1]]) as never
+  search.vectorSearch = (async () => { throw new Error('연결 끊김') }) as never
+  keyword.search = (async () => [{ postId: 3, boardId: 1 }]) as never
+
+  try {
+    const result = await search.retrieve({ q: '질문', boardId: 1, limit: 10 }) as never[]
+    assert.equal(result.length, 1)
+    assert.equal(result[0]['matchType'], 'keyword')
+  } finally {
+    embedding.embed = originals.embed
+    search.vectorSearch = originals.vec
+    keyword.search = originals.kw
+  }
+})
+
+test('키워드 검색이 던져도 벡터 결과는 나온다', async () => {
+  const originals = { embed: embedding.embed, vec: search.vectorSearch, kw: keyword.search }
+  embedding.embed = (async () => [[0.1]]) as never
+  search.vectorSearch = (async () => [{ postId: 7, boardId: 1, content: '조각', score: 0.85 }]) as never
+  keyword.search = (async () => { throw new Error('연결 끊김') }) as never
+
+  try {
+    const result = await search.retrieve({ q: '질문', boardId: 1, limit: 10 }) as never[]
+    assert.equal(result.length, 1)
+    assert.equal(result[0]['matchType'], 'vector')
+  } finally {
+    embedding.embed = originals.embed
+    search.vectorSearch = originals.vec
+    keyword.search = originals.kw
+  }
+})
+
 test('빈 질의는 아무것도 찾지 않는다', async () => {
   const result = await search.retrieve({ q: '   ', boardId: 1, limit: 10 })
   assert.deepEqual(result, [])
