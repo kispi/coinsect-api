@@ -4,6 +4,7 @@ import IContext from '../core/interfaces/context'
 import orm from '../core/orm'
 import helpers from '../core/helpers'
 import postService from '../services/post'
+import ragIndexer from '../services/rag/indexer'
 
 // 자유게시판 id
 const freeBoardId = 1
@@ -43,8 +44,15 @@ const postController = {
 
     try {
       payload['sharingKey'] = helpers.crypto.generateUUID(true)
-      await orm.querySetter(c, Post).insert().into(Post).values(payload).execute()
+      const inserted = await orm.querySetter(c, Post).insert().into(Post).values(payload).execute()
       c.res.success()
+
+      // 등록하고 그 자리에서 배수를 깨운다. 기다리지 않는다 - 글쓰기가 임베딩을
+      // 기다릴 이유가 없고, 실패해도 훑기가 5분 안에 잡는다.
+      const postId = ((inserted.identifiers || [])[0] || {}).id
+      if (postId) {
+        void ragIndexer.enqueue(postId).then(() => ragIndexer.drain())
+      }
     } catch (e) {
       c.res.failed(e)
     }
@@ -98,6 +106,7 @@ const postController = {
       target.lastEdit = new Date()
       await Post.save(target)
       c.res.success()
+      void ragIndexer.enqueue(target.id).then(() => ragIndexer.drain())
     } catch (e) {
       c.res.failed(e)
     }
@@ -166,6 +175,8 @@ const postController = {
       }
 
       await postRepository.softRemove(target)
+      // 지워진 글이 검색에 남아 있는 시간을 만들면 안 된다. 눌러보면 없는 글로 간다.
+      void ragIndexer.removeChunks(target.id)
       c.res.success()
     } catch (e) {
       c.res.failed()

@@ -22,6 +22,7 @@ import cron from '../core/cron'
 import helpers from '../core/helpers'
 import chatService from '../services/chat'
 import aiUsageService from '../services/ai_usage'
+import ragIndexer from '../services/rag/indexer'
 
 const service = useService()
 
@@ -116,6 +117,13 @@ routesPost.update = async (c: IContext) => {
   } catch (e) {
     c.res.failed(e)
   }
+}
+// 어드민 삭제도 청크를 걷어야 한다. 제네릭 useCRUD는 글을 모르므로 여기서 덮는다.
+const genericDelete = routesPost.delete
+routesPost.delete = async (c: IContext) => {
+  const id = Number(c.req.params['id'])
+  await genericDelete(c)
+  if (id) void ragIndexer.removeChunks(id)
 }
 
 const routesUser = useCRUD({ model: User, useSoftDelete: true, withDeleted: true })
