@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { addUsage, costOf, describeUsage, emptyUsage, mergeUsage } from '../services/content/model_usage'
+import { addUsage, costOf, describeUsage, emptyUsage, mergeUsage, MODEL_PRICING } from '../services/content/model_usage'
 
 test('costOf: thinking 토큰을 출력 단가로 함께 센다', () => {
   // gemini-3.8-flash: 입력 $0.75/M, 출력 $3.75/M
@@ -14,9 +14,12 @@ test('costOf: thinking 토큰을 출력 단가로 함께 센다', () => {
   assert.equal(costOf('gemini-3.8-flash', 0, 500_000, 500_000), costOf('gemini-3.8-flash', 0, 1_000_000, 0))
 })
 
-test('costOf: 단가표에 없는 모델은 0으로 둔다', () => {
-  // 모델을 갈아탔는데 단가를 안 적으면 비용이 조용히 틀리는 대신 0으로 보여 눈에 띈다.
-  assert.equal(costOf('gemini-unknown', 1_000_000, 1_000_000, 0), 0)
+test('costOf: 단가표에 없는 모델은 가장 비싼 단가로 친다', () => {
+  // 모르는 것을 0으로 치면 비용이 조용히 무력해진다. 가장 비싼 단가로 계산한다.
+  const unknown = costOf('gemini-unknown', 1_000_000, 1_000_000, 0)
+  const priciest = Math.max(...Object.values(MODEL_PRICING).map(p => p.input + p.output))
+  assert.equal(unknown, priciest)
+  assert.ok(unknown > 0)
 })
 
 test('addUsage: SDK 응답 한 건을 누계에 더한다', () => {
@@ -73,4 +76,20 @@ test('describeUsage: 모델과 토큰, 비용을 한 줄로 적는다', () => {
     describeUsage(addUsage(emptyUsage('gemini-3.8-flash'), { promptTokenCount: 100, candidatesTokenCount: 10 })),
     /thinking/,
   )
+})
+
+test('표에 없는 모델은 0이 아니라 가장 비싼 단가로 친다', () => {
+  // 모르는 것을 0으로 치면 새 모델을 붙인 날 비용이 조용히 사라진다.
+  const unknown = costOf('gemini-99-ultra', 1_000_000, 0, 0)
+  const priciest = Math.max(...Object.values(MODEL_PRICING).map(p => p.input))
+
+  assert.equal(unknown, priciest)
+  assert.ok(unknown > 0)
+})
+
+test('임베딩 모델은 출력 단가가 0이라 입력만 센다', () => {
+  const only = costOf('gemini-embedding-001', 1_000_000, 0, 0)
+  assert.equal(only, 0.15)
+  // 출력 토큰을 넣어도 값이 늘지 않는다.
+  assert.equal(costOf('gemini-embedding-001', 1_000_000, 500_000, 0), 0.15)
 })
