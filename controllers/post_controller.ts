@@ -31,10 +31,21 @@ export const writeIpRateLimited = async (c: IContext) => !await rateLimit(`write
 // 걸려도 요청을 거절하지 않는다. 글은 이미 저장됐다. 즉시 배수만 건너뛰면 5분 주기
 // 훑기가 그 글을 집는다. 사용자는 아무것도 잃지 않고 인덱싱만 조금 늦어진다.
 //
-// 분당 5회다. 본문 상한 2만 자에서 글 하나가 약 $0.0023이므로, 즉시 배수로 나가는
-// 돈이 이 층에서 묶인다. globalKey를 인자로 둔 것은 테스트가 서로의 바구니를
-// 오염시키지 않게 하려는 것이다 - IP를 바꿔도 전역 바구니는 하나뿐이라 키를 갈 수
-// 있어야 각 검사가 의도한 것을 잰다.
+// 분당 5회다. 본문 상한 2만 자에서 글 하나가 약 $0.0024이고, 아래 IMMEDIATE_DRAIN_LIMIT이
+// 1이라 이 층이 곧 즉시 인덱싱의 천장이다 - 분당 5건, 하루 7,200건, 약 $17.3이다.
+// 여기에 훑기의 몫(주기당 20건 × 5분 = 하루 5,760건, 약 $13.8)을 더한 하루 약 $31이
+// 이 기능이 최악의 경우 쓰는 전부다.
+//
+// globalKey를 인자로 둔 것은 테스트가 서로의 바구니를 오염시키지 않게 하려는 것이다 -
+// IP를 바꿔도 전역 바구니는 하나뿐이라 키를 갈 수 있어야 각 검사가 의도한 것을 잰다.
+// 즉시 배수가 한 번에 처리할 잡 수. cron은 20인데 여기는 1이다. 값이 다른 것이 의도다.
+//
+// 20은 cron이 밀린 큐를 따라잡으라고 정한 값이다. 글 하나를 쓰고 부르는 이 자리의
+// 목적은 방금 쓴 글을 빨리 인덱싱하는 것뿐이라 1이면 족하다. 20으로 맞추면 전역
+// 한도(분당 5회)에 20을 곱한 분당 100건이 천장이 되어, 한도를 걸어 둔 의미가 스무
+// 배로 흐려진다. 나중에 두 값을 같게 맞추고 싶어지면 이 곱셈을 먼저 볼 것.
+export const IMMEDIATE_DRAIN_LIMIT = 1
+
 export const mayIndexNow = async (ip: string, globalKey = 'write:global') => {
   if (await rateLimit(globalKey, 5, 60)) return true
 
@@ -97,7 +108,7 @@ const postController = {
         // 잡 등록은 예산과 무관하게 항상 한다. 등록은 행 하나라 공짜이고, 등록해 두면
         // 즉시 배수를 건너뛰어도 훑기가 다음 주기에 집는다.
         void ragIndexer.enqueue(postId)
-          .then(async () => { if (await mayIndexNow(c.req.ip)) await ragIndexer.drain() })
+          .then(async () => { if (await mayIndexNow(c.req.ip)) await ragIndexer.drain(IMMEDIATE_DRAIN_LIMIT) })
           .catch(e => log.error('인덱싱 배수 실패', e))
       }
     } catch (e) {
@@ -159,7 +170,7 @@ const postController = {
       // 같은 자리에서, 같은 바구니로 쓴다 - 쓰기와 수정이 만드는 인덱싱 비용이 같은데
       // 바구니를 나누면 같은 사람이 두 배를 쓸 수 있다.
       void ragIndexer.enqueue(target.id)
-        .then(async () => { if (await mayIndexNow(c.req.ip)) await ragIndexer.drain() })
+        .then(async () => { if (await mayIndexNow(c.req.ip)) await ragIndexer.drain(IMMEDIATE_DRAIN_LIMIT) })
         .catch(e => log.error('인덱싱 배수 실패', e))
     } catch (e) {
       c.res.failed(e)

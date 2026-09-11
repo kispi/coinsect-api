@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { writeIpRateLimited, mayIndexNow } from '../controllers/post_controller'
+import { writeIpRateLimited, mayIndexNow, IMMEDIATE_DRAIN_LIMIT } from '../controllers/post_controller'
 import IContext from '../core/interfaces/context'
 
 const contextOf = (ip: string) => ({ req: { ip } }) as unknown as IContext
@@ -66,4 +66,10 @@ test('쓰기와 수정이 같은 전역 바구니를 쓴다', async () => {
   for (let i = 0; i < 2; i += 1) assert.equal(await mayIndexNow('10.0.4.2', globalKey), true)
 
   assert.equal(await mayIndexNow('10.0.4.1', globalKey), false)
+})
+
+test('즉시 배수는 한 번에 한 건만 처리한다', () => {
+  // cron은 20건이다. 값이 다른 것이 의도다 - 20으로 맞추면 전역 한도(분당 5회)에
+  // 20이 곱해져 분당 100건이 천장이 되고, 한도를 걸어 둔 의미가 스무 배로 흐려진다.
+  assert.equal(IMMEDIATE_DRAIN_LIMIT, 1)
 })

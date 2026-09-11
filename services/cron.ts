@@ -64,6 +64,10 @@ const cronService = {
       id: 'indexPosts',
       // 훑기가 정합성의 근거이고, 배수가 그것을 소화한다. 글을 쓰면 그 자리에서도
       // 깨우므로 이 주기는 놓친 것을 줍는 그물이다.
+      //
+      // 여기는 기본값 20건을 그대로 쓴다. 그물이 밀린 큐를 따라잡아야 하는 자리라서다.
+      // 글쓰기 경로는 1건만 처리한다(post_controller의 IMMEDIATE_DRAIN_LIMIT) - 거기는
+      // 방금 쓴 글 하나를 빨리 올리는 것이 목적이고, 공개 경로라 전역 한도와 곱해진다.
       runnable: async () => {
         await ragIndexer.sweep()
         await ragIndexer.drain()
