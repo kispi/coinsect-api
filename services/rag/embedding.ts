@@ -97,19 +97,42 @@ const embedding = {
       const startedAt = Date.now()
 
       try {
-        const vectors = await embedding.callApi(batch.map(o => o.text), task)
+        // 같은 배치 안에 같은 텍스트가 두 번 있을 수 있다(같은 글이 여러 청크의
+        // 겹침으로 다시 등장하는 경우 등). 해시로 묶어 API에는 한 번만 보낸다 -
+        // 안 그러면 토큰 추정이 두 배로 잡혀 비용 로그가 부풀려진다.
+        const uniqueHashes = [...new Set(batch.map(o => o.hash))]
+        const textByHash = new Map(batch.map(o => [o.hash, o.text]))
+        const uniqueTexts = uniqueHashes.map(h => textByHash.get(h) as string)
 
-        batch.forEach((o, k) => { out[o.i] = vectors[k] || null })
-        await embedding.putCached(
-          batch.map((o, k) => ({ hash: o.hash, vector: vectors[k] })).filter(o => o.vector),
-          task,
-        )
+        const vectors = await embedding.callApi(uniqueTexts, task)
+        if (vectors.length !== uniqueTexts.length) {
+          // 조용히 나머지를 null로 채우면 왜 짧아졌는지 알 길이 없다.
+          log.error('embedding 응답 길이가 요청보다 짧다', { expected: uniqueTexts.length, got: vectors.length })
+        }
+
+        const vectorByHash = new Map<string, number[]>()
+        uniqueHashes.forEach((h, k) => { if (vectors[k]) vectorByHash.set(h, vectors[k]) })
+        batch.forEach(o => { out[o.i] = vectorByHash.get(o.hash) || null })
+
+        // 캐시 쓰기는 따로 감싼다. API 호출은 이미 성공해 out이 채워졌는데 여기서
+        // 던지면 바깥 catch로 빠져 성공한 호출이 실패로 집계되고, 실패율/비용
+        // 통계가 둘 다 어긋난다. 캐시 실패는 로그만 남기고 다음 호출에서 다시
+        // 채워질 것에 맡긴다.
+        try {
+          await embedding.putCached(
+            uniqueHashes.map(h => ({ hash: h, vector: vectorByHash.get(h) as number[] })).filter(o => o.vector),
+            task,
+          )
+        } catch (e) {
+          log.error('embedding 캐시 적재 실패', e)
+        }
 
         // 행은 요청당 하나다. 청크마다 남기면 호출 수가 실제와 어긋난다.
+        // 토큰도 실제로 보낸 유니크 텍스트 기준으로 센다.
         void aiUsage.record({
           task: aiTask,
           model: EMBEDDING_MODEL,
-          inputTokens: batch.reduce((sum, o) => sum + estimateTokens(o.text), 0),
+          inputTokens: uniqueTexts.reduce((sum, t) => sum + estimateTokens(t), 0),
           latencyMs: Date.now() - startedAt,
         })
       } catch (e) {

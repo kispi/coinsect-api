@@ -87,6 +87,27 @@ test('API가 실패하면 던지지 않고 null을 채워 준다', async () => {
   }
 })
 
+test('같은 텍스트가 배치에 두 번 있어도 API에는 한 번만 보낸다', async () => {
+  const vec = new Array(EMBEDDING_DIMS).fill(0.3)
+  let sent: string[] = []
+
+  const originals = { api: embedding.callApi, get: embedding.getCached, put: embedding.putCached }
+  embedding.getCached = (async () => new Map()) as never
+  embedding.callApi = (async texts => { sent = texts; return texts.map(() => vec) }) as never
+  embedding.putCached = (async () => {}) as never
+
+  try {
+    const out = await embedding.embed(['같은 글', '같은 글'], 'RETRIEVAL_DOCUMENT')
+    assert.equal(sent.length, 1, '유니크 텍스트만 API로 보낸다')
+    assert.deepEqual(out[0], vec)
+    assert.deepEqual(out[1], vec)
+  } finally {
+    embedding.callApi = originals.api
+    embedding.getCached = originals.get
+    embedding.putCached = originals.put
+  }
+})
+
 test('토큰 추정은 글자 수에 비례한다', () => {
   assert.ok(estimateTokens('가'.repeat(150)) > estimateTokens('가'.repeat(15)))
   assert.ok(estimateTokens('') === 0)
