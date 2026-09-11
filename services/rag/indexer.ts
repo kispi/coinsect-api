@@ -168,10 +168,13 @@ const indexer = {
     // 비어 있다. 그때 건너뛰면 그 글은 영원히 인덱싱되지 않고 조용히 검색에서
     // 빠진다. 그래서 청크가 실제로 있고 전부 벡터가 채워져 있을 때만 건너뛴다.
     if (job.content_hash && job.content_hash === newHash) {
+      // model도 함께 본다. EMBEDDING_MODEL이나 차원을 바꾸면 옛 공간의 벡터를 가진
+      // 청크가 여전히 "완전함"으로 세어져, 모델을 바꿔도 인덱스가 안 갈리는
+      // 상태가 된다.
       const [state] = await indexer.query(
         `SELECT count(*)::int AS total, (count(*) FILTER (WHERE embedding IS NULL))::int AS missing
-         FROM post_chunks WHERE post_id = $1`,
-        [post.id],
+         FROM post_chunks WHERE post_id = $1 AND model = $2`,
+        [post.id, EMBEDDING_MODEL],
       )
 
       if (state && Number(state.total) > 0 && Number(state.missing) === 0) {
@@ -188,18 +191,19 @@ const indexer = {
     const vectors = await embedding.embed(chunks, 'RETRIEVAL_DOCUMENT', 'embed_index')
 
     // embedding.embed는 설계상 던지지 않고 실패한 자리에 null을 채운다 - 검색의
-    // 키워드 경로는 임베딩 없이도 동작해야 하기 때문이다. 하지만 여기서 그 null을
-    // 그대로 받아 done으로 찍으면, API 장애나 키 오류로 전부 실패했을 때도 성공한
-    // 것처럼 기록되어 훑기가 다시 집지 않고 그 글은 벡터 검색에서 영영 빠진다.
-    // 청크가 있는데 전부 null이면 던져서 drain의 재시도(그리고 결국 failed)로
-    // 넘긴다. 일부만 비면 나머지는 살아 있으니 done으로 두되 로그로 남긴다 -
-    // 청크 하나가 계속 실패한다고 글 전체의 검색 가능성을 막을 이유는 없다.
+    // 키워드 경로는 임베딩 없이도 동작해야 하기 때문이다. 하지만 그 null을 그대로
+    // 받아 done으로 찍으면 두 가지가 어긋난다. (1) 실패한 청크의 해시는 캐시에
+    // 없으므로, 조회수만 올라도 도는 다음 훑기가 done인 이 잡을 다시 통째로
+    // 돌리다 그 청크에서 또 실패해 진짜 API 호출이 5분마다 영원히 나간다.
+    // (2) done으로 남으면 attempts가 안 올라가 영영 failed로도 접히지 않는다 -
+    // failed_at으로 막으려던 무한 재시도가 글 하나 단위 대신 청크 하나 단위로
+    // 되살아나는 셈이다. 그래서 청크 하나라도 비면(전부든 일부든) 던져서 drain의
+    // 기존 재시도 기계(attempts 증가 → 상한이면 failed + failed_at)를 그대로
+    // 태운다. replaceChunks를 부르기 전에 던지므로, 이전에 이미 성공해 쌓여 있던
+    // 청크는 손대지 않고 그대로 검색에 남는다.
     const nullCount = vectors.filter(v => !v).length
-    if (chunks.length > 0 && nullCount === chunks.length) {
-      throw new Error(`글 ${post.id}의 청크 ${chunks.length}개가 모두 임베딩되지 않았다`)
-    }
     if (nullCount > 0) {
-      log.error(`indexer: 글 ${post.id}의 청크 ${nullCount}/${chunks.length}개가 임베딩되지 않았다`)
+      throw new Error(`글 ${post.id}의 청크 ${nullCount}/${chunks.length}개가 임베딩되지 않았다`)
     }
 
     await indexer.replaceChunks(post.id, post.board_id, chunks.map((content, i) => ({

@@ -215,15 +215,16 @@ test('임베딩이 전부 실패하면 done으로 찍지 않고 던진다', asyn
   }
 })
 
-test('임베딩이 일부만 실패하면 나머지로 done을 찍는다', async () => {
-  // 청크 하나가 계속 실패한다고 글 전체의 검색 가능성을 막을 이유는 없다.
+test('임베딩이 일부만 실패해도 done으로 찍지 않고 던진다', async () => {
+  // done으로 찍으면 실패한 청크의 해시는 캐시에 없어 조회수만 올라도 도는 다음
+  // 훑기마다 그 청크에서 진짜 API 호출이 다시 나간다. 게다가 done은 attempts를
+  // 올리지 않아 영영 failed로도 안 접힌다 - 청크 하나 단위의 무한 재시도가
+  // 생긴다. 던져서 drain의 재시도 예산을 쓰게 해야 한다.
   const longSource = `${'가'.repeat(500)}\n\n${'나'.repeat(500)}`
   const originalQuery = indexer.query
   const originalEmbed = embedding.embed
-  const calls: string[] = []
 
   indexer.query = (async (text: string) => {
-    calls.push(text)
     if (/^SELECT id, board_id, title, content FROM posts/.test(text)) {
       return [{ id: 7, board_id: 1, title: '', content: longSource }]
     }
@@ -232,13 +233,44 @@ test('임베딩이 일부만 실패하면 나머지로 done을 찍는다', async
   embedding.embed = (async (texts: string[]) => texts.map((_, i) => (i === 0 ? [0.1] : null))) as never
 
   try {
-    await indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: null })
+    await assert.rejects(() => indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: null }))
   } finally {
     indexer.query = originalQuery
     embedding.embed = originalEmbed
   }
+})
 
-  assert.ok(calls.some(s => /UPDATE embedding_jobs SET status = 'done'/.test(s)))
+test('일부만 실패한 잡도 drain을 통해 시도 횟수가 오르고 상한에서 failed로 접힌다', async () => {
+  // runJob이 부분 실패에서도 던지므로, drain의 기존 catch(attempts 증가 → 상한이면
+  // failed + failed_at)가 그대로 적용되는지 drain을 통해 확인한다.
+  const originalQuery = indexer.query
+  const originalRunJob = indexer.runJob
+  const updates: { params: unknown[] }[] = []
+
+  indexer.query = (async (text: string, params: unknown[] = []) => {
+    if (/^SELECT id, post_id, attempts, content_hash FROM embedding_jobs/.test(text)) {
+      return [{ id: 1, post_id: 7, attempts: 4, content_hash: null }]
+    }
+    if (/^UPDATE embedding_jobs SET attempts/.test(text)) {
+      updates.push({ params })
+    }
+    return []
+  }) as never
+  indexer.runJob = (async () => { throw new Error('청크 1/2개가 임베딩되지 않았다') }) as never
+
+  try {
+    await unlocked()
+    await indexer.drain()
+  } finally {
+    indexer.query = originalQuery
+    indexer.runJob = originalRunJob
+    await unlocked()
+  }
+
+  assert.equal(updates.length, 1)
+  // attempts=4였으니 이번이 다섯 번째다 - 상한에 닿아 failed로 접혀야 한다.
+  assert.equal(updates[0].params[1], 5)
+  assert.equal(updates[0].params[3], 'failed')
 })
 
 test('내용이 안 바뀌었고 청크가 멀쩡하면 다시 인덱싱하지 않는다', async () => {
@@ -248,6 +280,7 @@ test('내용이 안 바뀌었고 청크가 멀쩡하면 다시 인덱싱하지 �
   const hash = computeHash(source)
   const originalQuery = indexer.query
   const originalReplaceChunks = indexer.replaceChunks
+  const originalEmbed = embedding.embed
   const replaceCalls: unknown[] = []
   const sql: string[] = []
 
@@ -263,12 +296,16 @@ test('내용이 안 바뀌었고 청크가 멀쩡하면 다시 인덱싱하지 �
     return []
   }) as never
   indexer.replaceChunks = (async (...args: unknown[]) => { replaceCalls.push(args) }) as never
+  // 건너뛰기가 회귀해 이 단계까지 떨어지면 진짜 Google API를 부르게 된다.
+  // 던지는 스텁으로 갈아끼워 회귀가 네트워크 시도 없이 바로 드러나게 한다.
+  embedding.embed = (async () => { throw new Error('건너뛰기가 깨져 임베딩까지 내려왔다') }) as never
 
   try {
     await indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: hash })
   } finally {
     indexer.query = originalQuery
     indexer.replaceChunks = originalReplaceChunks
+    embedding.embed = originalEmbed
   }
 
   assert.equal(replaceCalls.length, 0, '내용이 안 바뀌었으면 청크를 다시 쓰면 안 된다')
