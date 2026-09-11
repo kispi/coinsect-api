@@ -336,11 +336,17 @@ const realTimePositionService = {
     base64,
     mimeType,
     prompt,
+    positionId,
+    requester,
   }: {
     url?: string,
     base64?: string,
     mimeType?: string,
     prompt?: string,
+    // 어느 스트리머의 화면을 읽었는지. desktopReport는 알고 있지만 어드민의
+    // auto_parse 호출(스트리머 없이 임의 URL을 넣는 경우)은 모르므로 선택 항목이다.
+    positionId?: string,
+    requester?: string,
   }) => {
     const genAI = new GoogleGenAI({ apiKey: store.state.serverConfig.GOOGLE_AI_STUDIO })
 
@@ -355,25 +361,44 @@ const realTimePositionService = {
       },
     }]
 
+    const ref = positionId ? { type: 'streamer', id: positionId } : undefined
+
     const startedAt = Date.now()
-    const result = await genAI.models.generateContent({
-      // 2026-09-09에 gemini-3.5-flash-lite(월 $28 → $4)로 내리려다 접었다. 이 프롬프트로
-      // 재보니 BTC 화면은 읽는데 알트코인 화면(SOXL 픽스처)은 9회 중 0회, 전부
-      // legible=false로 넘긴다. 방송인들이 실제로 만지는 게 알트코인이라
-      // (2026-09-09 박호두 KORUUSDT) 비용을 아끼는 게 아니라 자동화를 수동 입력으로
-      // 바꾸는 셈이 된다. 같은 조건에서 이 모델은 9/9로 읽는다.
-      model: POSITION_MODEL,
-      config: {
-        responseMimeType: 'application/json',
-        // 주지 않으면 이 모델은 호출당 2,600토큰씩 생각하고, 그게 출력 단가로 과금된다.
-        // 2026-09-09 실측(픽스처 3장 x 4회): 안 주면 44/48 · 11.7초 · 월 $80,
-        // 0을 주면 48/48 · 4.2초 · 월 $21. 정확도가 오히려 올라가서 트레이드오프가 없다.
-        // thinkingLevel은 3.x의 새 파라미터지만 MINIMAL은 이 모델이 400으로 거부하고
-        // LOW는 안 준 것과 차이가 없다. thinkingBudget이 맞는 손잡이다.
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-      contents,
-    })
+    let result
+    try {
+      result = await genAI.models.generateContent({
+        // 2026-09-09에 gemini-3.5-flash-lite(월 $28 → $4)로 내리려다 접었다. 이 프롬프트로
+        // 재보니 BTC 화면은 읽는데 알트코인 화면(SOXL 픽스처)은 9회 중 0회, 전부
+        // legible=false로 넘긴다. 방송인들이 실제로 만지는 게 알트코인이라
+        // (2026-09-09 박호두 KORUUSDT) 비용을 아끼는 게 아니라 자동화를 수동 입력으로
+        // 바꾸는 셈이 된다. 같은 조건에서 이 모델은 9/9로 읽는다.
+        model: POSITION_MODEL,
+        config: {
+          responseMimeType: 'application/json',
+          // 주지 않으면 이 모델은 호출당 2,600토큰씩 생각하고, 그게 출력 단가로 과금된다.
+          // 2026-09-09 실측(픽스처 3장 x 4회): 안 주면 44/48 · 11.7초 · 월 $80,
+          // 0을 주면 48/48 · 4.2초 · 월 $21. 정확도가 오히려 올라가서 트레이드오프가 없다.
+          // thinkingLevel은 3.x의 새 파라미터지만 MINIMAL은 이 모델이 400으로 거부하고
+          // LOW는 안 준 것과 차이가 없다. thinkingBudget이 맞는 손잡이다.
+          thinkingConfig: { thinkingBudget: 0 },
+        },
+        contents,
+      })
+    } catch (e) {
+      // 판독 호출이 가장 빈번한 자리라, 여기서 조용히 실패하면 장애 중에도 ai_usage가
+      // 텅 비어 ok 칼럼이 있는 이유가 무색해진다. 실패도 행으로 남기고 원래 에러는
+      // 그대로 위로 던진다 - desktopReport가 다음 프레임으로 넘어가는 판단은 그대로 해야 한다.
+      void aiUsage.record({
+        task: 'position_read',
+        model: POSITION_MODEL,
+        latencyMs: Date.now() - startedAt,
+        ok: false,
+        error: (e || {}).message || String(e),
+        ref,
+        requester,
+      })
+      throw e
+    }
 
     // 계측. 프레임을 여러 장 보면 호출도 여러 번이므로 행도 여러 개 남는다.
     // 기다리지 않는다 - 판독 응답이 계측 때문에 늦어지면 안 된다.
@@ -382,7 +407,8 @@ const realTimePositionService = {
       model: POSITION_MODEL,
       usageMetadata: result.usageMetadata,
       latencyMs: Date.now() - startedAt,
-      requester: 'desktop',
+      ref,
+      requester,
     })
 
     const parsed = JSON.parse(result.text)
@@ -451,7 +477,12 @@ const realTimePositionService = {
     for (const base64 of images || []) {
       let candidate = null
       try {
-        candidate = JSON.parse(await realTimePositionService.autoParse({ base64, mimeType: 'image/jpeg' }))
+        candidate = JSON.parse(await realTimePositionService.autoParse({
+          base64,
+          mimeType: 'image/jpeg',
+          positionId,
+          requester: 'desktop',
+        }))
         usage = mergeUsage(usage, candidate.usage)
       } catch (e) { continue /* JSON이 깨진 응답. 다음 장을 본다. */ }
 

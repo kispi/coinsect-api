@@ -100,6 +100,31 @@ test('집계는 같은 날을 두 번 돌려도 값이 두 배가 되지 않는�
   assert.equal(upserted[0].requests, 12)
 })
 
+test('rollup은 aggregate가 돌려준 failures를 잃지 않고 그대로 daily에 넘긴다', async () => {
+  // aggregate() 자체(SQL 집계)는 DB 없이 못 돌린다. 여기서 보는 것은 그 아래
+  // 단계다 - failures가 requests와 따로 살아남아 upsertDaily까지 도달하는지,
+  // 그리고 실패가 섞여도 requests가 그걸 감추지 않는지.
+  const upserted = []
+  const originalAgg = aiUsage.aggregate
+  const originalUpsert = aiUsage.upsertDaily
+  aiUsage.aggregate = (async () => ([
+    // 12건 중 3건이 실패. requests만 보면 평소와 다를 바 없는 하루로 읽힌다.
+    { day: '2026-09-10', model: 'gemini-3.8-flash', task: 'position_read', requests: 12, failures: 3, tokensIn: 100, tokensOut: 20, tokensThinking: 5, costMicros: 3000 },
+  ])) as never
+  aiUsage.upsertDaily = (async rows => { upserted.push(...rows) }) as never
+
+  try {
+    await aiUsage.rollup('2026-09-10')
+  } finally {
+    aiUsage.aggregate = originalAgg
+    aiUsage.upsertDaily = originalUpsert
+  }
+
+  assert.equal(upserted.length, 1)
+  assert.equal(upserted[0].requests, 12)
+  assert.equal(upserted[0].failures, 3, 'failures가 requests와 별개로 보존된다')
+})
+
 test('utcDay는 서버 로케일과 무관하게 UTC 날짜를 준다', () => {
   assert.match(aiUsage.utcDay(), /^\d{4}-\d{2}-\d{2}$/)
   const today = new Date(aiUsage.utcDay())

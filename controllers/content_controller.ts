@@ -26,6 +26,11 @@ const contentController = {
         const data = await service.content.realTimePosition.autoParse({
           url: c.req.body['url'],
           prompt: c.req.body['prompt'],
+          // desktopReport와 같은 함수를 쓰지만 이건 캡처 주기가 아니라 어드민이 화면을
+          // 직접 다시 읽힌 것이다. 'desktop'으로 뭉뚱그리면 장애 조사 때 수동 재시도가
+          // 캡처 트래픽으로 섞여 보인다. IP로 구분한다 - allWithLLM이 요청자를 적는
+          // 방식과 같다.
+          requester: c.req.ip,
         })
         c.res.asJSON(data)
       } catch (e) {

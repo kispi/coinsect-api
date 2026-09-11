@@ -72,6 +72,9 @@ const aiUsage = {
       .addSelect('sum(u.output_tokens)', 'tokensOut')
       .addSelect('sum(u.thinking_tokens)', 'tokensThinking')
       .addSelect('sum(u.cost_micros)', 'costMicros')
+      // 실패도 requests에는 섞여 있다. 장애가 나도 요청 수는 그대로라, 실패만 따로
+      // 세지 않으면 '평소와 같은 트래픽인데 비용만 평평하다'가 장애의 흔적을 지운다.
+      .addSelect('sum(case when u.ok then 0 else 1 end)', 'failures')
       .where(`u.created_at >= :day::date AND u.created_at < (:day::date + interval '1 day')`, { day })
       // createQueryBuilder는 리포지터리 find와 달리 소프트 삭제를 자동으로 거르지 않는다.
       // 지금은 AiUsage를 소프트 삭제하는 경로가 없지만, 생기는 순간 지운 행이 집계에
@@ -91,6 +94,7 @@ const aiUsage = {
       tokensOut: Number(r.tokensOut),
       tokensThinking: Number(r.tokensThinking),
       costMicros: Number(r.costMicros),
+      failures: Number(r.failures),
     }))
   },
 
@@ -134,12 +138,23 @@ const aiUsage = {
     const start = from || aiUsage.utcDay(-30)
     const end = to || aiUsage.utcDay()
 
-    const data = await dataSource.getRepository(AiUsageDaily)
+    const rows = await dataSource.getRepository(AiUsageDaily)
       .createQueryBuilder('d')
       .where('d.day >= :start AND d.day <= :end', { start, end })
       .orderBy('d.day', 'DESC')
       .addOrderBy('d.cost_micros', 'DESC')
       .getMany()
+
+    // aggregate()와 같은 이유. bigint 칼럼(tokensIn/Out/Thinking, costMicros)은
+    // getMany로도 문자열로 오는데 requests(integer)는 숫자로 온다. 한 행에 타입이
+    // 섞인 채로 내보내면, 이 행들을 다시 합산하는 소비자가 문자열 이어붙이기를 하게 된다.
+    const data = rows.map(o => ({
+      ...o,
+      tokensIn: Number(o.tokensIn),
+      tokensOut: Number(o.tokensOut),
+      tokensThinking: Number(o.tokensThinking),
+      costMicros: Number(o.costMicros),
+    }))
 
     return {
       data,

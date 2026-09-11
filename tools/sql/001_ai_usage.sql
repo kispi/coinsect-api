@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS ai_usage_daily (
   model           varchar(64) NOT NULL,
   task            varchar(32) NOT NULL,
   requests        integer NOT NULL DEFAULT 0,
+  failures        integer NOT NULL DEFAULT 0,
   tokens_in       bigint NOT NULL DEFAULT 0,
   tokens_out      bigint NOT NULL DEFAULT 0,
   tokens_thinking bigint NOT NULL DEFAULT 0,

@@ -19,6 +19,12 @@ export class AiUsageDaily {
   @Column({ default: 0 })
   requests: number
 
+  // requests와 따로 두는 이유: requests는 성공·실패가 섞인 채 집계된다. 장애 중에도
+  // 요청 수는 평소와 같이 보이므로, failures가 없으면 '조용히 실패만 치솟는 날'이
+  // daily 집계에서는 평범한 하루로 읽힌다.
+  @Column({ default: 0 })
+  failures: number
+
   // 서비스 전체 합이라 integer의 상한($2,147)에 언젠가 닿는다.
   @Column({ type: 'bigint', default: 0 })
   tokensIn: number
