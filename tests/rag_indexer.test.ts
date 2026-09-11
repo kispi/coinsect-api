@@ -192,12 +192,16 @@ test('drain이 실패 시각을 앱 시계가 아니라 DB의 now()로 찍는다
   assert.ok(/failed_at = CASE WHEN \$4 = 'failed' THEN now\(\) END/.test(updateSql))
 })
 
-test('임베딩이 전부 실패하면 done으로 찍지 않고 던진다', async () => {
+test('임베딩이 전부 실패하면 저장하지 않고(replaceChunks를 부르지 않고) 던진다', async () => {
   // embedding.embed는 설계상 던지지 않고 null을 채운다. runJob이 그 null을 그대로
   // 받아들이면 API 장애 때도 성공한 것처럼 기록되어, 그 글은 벡터 검색에서
-  // 영영 빠지는데 아무 데도 드러나지 않는다.
+  // 영영 빠지는데 아무 데도 드러나지 않는다. 저장할 청크가 하나도 없으므로
+  // replaceChunks를 부르면 안 된다 - 부르면 빈 결과로 기존 인덱스를 덮어써
+  // 멀쩡하던 글이 검색에서 사라진다.
   const originalQuery = indexer.query
   const originalEmbed = embedding.embed
+  const originalReplaceChunks = indexer.replaceChunks
+  const replaceCalls: unknown[] = []
 
   indexer.query = (async (text: string) => {
     if (/^SELECT id, board_id, title, content FROM posts/.test(text)) {
@@ -206,23 +210,30 @@ test('임베딩이 전부 실패하면 done으로 찍지 않고 던진다', asyn
     return []
   }) as never
   embedding.embed = (async (texts: string[]) => texts.map(() => null)) as never
+  indexer.replaceChunks = (async (...args: unknown[]) => { replaceCalls.push(args) }) as never
 
   try {
     await assert.rejects(() => indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: null }))
   } finally {
     indexer.query = originalQuery
     embedding.embed = originalEmbed
+    indexer.replaceChunks = originalReplaceChunks
   }
+
+  assert.equal(replaceCalls.length, 0, '저장할 청크가 없으면 replaceChunks를 부르면 안 된다')
 })
 
-test('임베딩이 일부만 실패해도 done으로 찍지 않고 던진다', async () => {
-  // done으로 찍으면 실패한 청크의 해시는 캐시에 없어 조회수만 올라도 도는 다음
-  // 훑기마다 그 청크에서 진짜 API 호출이 다시 나간다. 게다가 done은 attempts를
-  // 올리지 않아 영영 failed로도 안 접힌다 - 청크 하나 단위의 무한 재시도가
-  // 생긴다. 던져서 drain의 재시도 예산을 쓰게 해야 한다.
+test('임베딩이 일부만 실패하면 성공한 청크는 저장한 뒤에 던진다', async () => {
+  // 청크 하나가 실패했다고 나머지 성공한 청크까지 잃으면 안 된다 - 성공한 것은
+  // replaceChunks로 먼저 저장하고, 그 다음에 던져 drain의 재시도 예산(attempts
+  // 증가 → 상한이면 failed + failed_at)을 쓰게 한다. done으로 찍으면 실패한
+  // 청크의 해시가 캐시에 없어 다음 훑기마다 그 청크에서 진짜 API 호출이 다시
+  // 나가고, attempts도 안 올라 영영 failed로도 안 접힌다.
   const longSource = `${'가'.repeat(500)}\n\n${'나'.repeat(500)}`
   const originalQuery = indexer.query
   const originalEmbed = embedding.embed
+  const originalReplaceChunks = indexer.replaceChunks
+  const replaceCalls: { postId: number, boardId: number, rows: { vector: number[] | null }[] }[] = []
 
   indexer.query = (async (text: string) => {
     if (/^SELECT id, board_id, title, content FROM posts/.test(text)) {
@@ -231,13 +242,22 @@ test('임베딩이 일부만 실패해도 done으로 찍지 않고 던진다', a
     return []
   }) as never
   embedding.embed = (async (texts: string[]) => texts.map((_, i) => (i === 0 ? [0.1] : null))) as never
+  indexer.replaceChunks = (async (postId, boardId, rows) => {
+    replaceCalls.push({ postId, boardId, rows })
+  }) as never
 
   try {
     await assert.rejects(() => indexer.runJob({ id: 1, post_id: 7, attempts: 0, content_hash: null }))
   } finally {
     indexer.query = originalQuery
     embedding.embed = originalEmbed
+    indexer.replaceChunks = originalReplaceChunks
   }
+
+  assert.equal(replaceCalls.length, 1, '성공한 청크는 던지기 전에 저장해야 한다')
+  // 실패한 청크도 자리는 유지한 채로 넘겨야 한다(하나는 벡터, 하나는 null).
+  assert.equal(replaceCalls[0].rows.length, 2)
+  assert.equal(replaceCalls[0].rows.filter(r => r.vector === null).length, 1)
 })
 
 test('일부만 실패한 잡도 drain을 통해 시도 횟수가 오르고 상한에서 failed로 접힌다', async () => {

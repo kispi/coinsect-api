@@ -199,11 +199,18 @@ const indexer = {
     // failed_at으로 막으려던 무한 재시도가 글 하나 단위 대신 청크 하나 단위로
     // 되살아나는 셈이다. 그래서 청크 하나라도 비면(전부든 일부든) 던져서 drain의
     // 기존 재시도 기계(attempts 증가 → 상한이면 failed + failed_at)를 그대로
-    // 태운다. replaceChunks를 부르기 전에 던지므로, 이전에 이미 성공해 쌓여 있던
-    // 청크는 손대지 않고 그대로 검색에 남는다.
+    // 태운다.
+    //
+    // 다만 저장 순서는 나뉜다. 전부 null이면 저장할 것이 없으니 replaceChunks를
+    // 부르기 전에 던진다 - 안 그러면 빈 결과로 기존 인덱스를 덮어써 멀쩡하던
+    // 글이 검색에서 사라진다. 일부만 null이면 성공한 청크는 실제로 있으니
+    // replaceChunks로 먼저 저장한 뒤에 던진다 - 청크 하나가 실패했다고 나머지
+    // 성공한 청크까지 잃으면 안 된다. 다음 재시도에서는 해시가 같아도
+    // missing > 0이라 건너뛰기에 안 걸리고 다시 시도한다.
     const nullCount = vectors.filter(v => !v).length
-    if (nullCount > 0) {
-      throw new Error(`글 ${post.id}의 청크 ${nullCount}/${chunks.length}개가 임베딩되지 않았다`)
+
+    if (nullCount === chunks.length && chunks.length > 0) {
+      throw new Error(`글 ${post.id}의 청크 ${chunks.length}개가 모두 임베딩되지 않았다`)
     }
 
     await indexer.replaceChunks(post.id, post.board_id, chunks.map((content, i) => ({
@@ -211,6 +218,11 @@ const indexer = {
       hash: computeHash(content),
       vector: vectors[i],
     })))
+
+    if (nullCount > 0) {
+      log.error(`indexer: 글 ${post.id}의 청크 ${nullCount}/${chunks.length}개가 임베딩되지 않았다`)
+      throw new Error(`글 ${post.id}의 청크 ${nullCount}/${chunks.length}개가 임베딩되지 않았다`)
+    }
 
     // 내용이 안 바뀌어 임베딩을 한 번도 치지 않았어도 indexed_at은 갱신한다.
     // 안 그러면 훑기가 같은 글을 영원히 다시 집는다. failed_at도 여기서 지운다 -
