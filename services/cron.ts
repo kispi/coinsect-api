@@ -5,6 +5,7 @@ import whaleAlertService from './onchain/whale_alert'
 import marketInfoService from './market_info'
 import dashboardService from './dashboard'
 import aiUsage from './ai_usage'
+import ragIndexer from './rag/indexer'
 
 const failableCrawl = (minValue: number) => {
   whaleAlertService.crawl(minValue).then().catch(() => {})
@@ -52,6 +53,16 @@ const cronService = {
       id: 'rollupAiUsage',
       runnable: rollupAiUsageJob,
       interval: 1000 * 60 * 60 * 24,
+    })
+    cron.addJob({
+      id: 'indexPosts',
+      // 훑기가 정합성의 근거이고, 배수가 그것을 소화한다. 글을 쓰면 그 자리에서도
+      // 깨우므로 이 주기는 놓친 것을 줍는 그물이다.
+      runnable: async () => {
+        await ragIndexer.sweep()
+        await ragIndexer.drain()
+      },
+      interval: 1000 * 60 * 5,
     })
     // core/cron의 setInterval은 선행 호출 없이 주기만 건다. 24시간 주기 작업은
     // 프로세스가 24시간 넘게 연속으로 살아야 처음 한 번 돈다. 이 레포는 배포마다

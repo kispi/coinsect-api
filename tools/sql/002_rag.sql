@@ -39,7 +39,11 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
   attempts     integer NOT NULL DEFAULT 0,
   last_error   text,
   locked_at    timestamptz,
-  locked_by    varchar(100)
+  locked_by    varchar(100),
+  -- 5회 실패해 'failed'가 된 시각. 훑기가 이 시각과 posts.updated_at을 비교해,
+  -- 글이 실제로 바뀐 뒤에만 되살린다. indexed_at으로는 이걸 구분 못 한다 -
+  -- failed 잡은 indexed_at이 계속 NULL이라 그것만 보면 매 훑기마다 되살아난다.
+  failed_at    timestamptz
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS embedding_jobs_post_unq ON embedding_jobs (post_id);

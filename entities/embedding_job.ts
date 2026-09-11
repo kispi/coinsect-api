@@ -31,4 +31,8 @@ export class EmbeddingJob extends BaseModel {
 
   @Column({ length: 100, nullable: true })
   lockedBy: string
+
+  // 'failed'가 된 시각. 글이 그 뒤에 바뀌었을 때만 훑기가 되살린다.
+  @Column({ type: 'timestamptz', nullable: true })
+  failedAt: Date
 }
