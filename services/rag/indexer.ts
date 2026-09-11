@@ -13,7 +13,11 @@ const LOCK_KEY = 'rag:locks'
 const LOCK_FIELD = 'drain'
 // 해시 필드에는 개별 만료가 없다. 값에 시작 시각을 적어두고 이만큼 지난 잠금은
 // 죽은 프로세스가 남긴 것으로 보고 뺏는다. desktop_jobs.ts가 잡을 잡는 방식과 같다.
-const LOCK_STALE_MS = 1000 * 60 * 5
+//
+// cron 주기(5분)보다 넉넉히 잡는다. 배수 한 번이 API 지연 등으로 5분을 살짝
+// 넘기기만 해도 값이 cron 주기와 같으면 바로 다음 틱이 "죽었다"고 보고 뺏어,
+// 두 배수가 같은 pending 행을 동시에 집어 같은 임베딩을 두 번 사게 된다.
+const LOCK_STALE_MS = 1000 * 60 * 15
 
 const MAX_ATTEMPTS = 5
 const vectorLiteral = (v: number[]) => `[${v.join(',')}]`
@@ -66,6 +70,14 @@ const indexer = {
   // (j.indexed_at IS NULL OR ...) 조건만 쓰면 5분마다 도는 훑기가 매번 되살려
   // 실패가 확정된 글에 임베딩 API 비용을 계속 태운다. failed_at을 별도로 찍어두고,
   // 글이 그 뒤에 실제로 바뀐 경우(p.updated_at > j.failed_at)에만 되살린다.
+  // failed_at이 비어 있는 옛 행(이 컬럼이 생기기 전에 실패한 행)은 j.updated_at을
+  // 대신 기준으로 삼는다 - NULL과의 비교는 항상 거짓이라 영영 안 살아나기 때문이다.
+  //
+  // attempts는 ON CONFLICT에서도 무조건 0으로 두지 않는다. pending 잡은 이
+  // 문장에 매번 다시 걸리므로(indexed_at이 아직 NULL이라) 무조건 0으로 두면
+  // drain이 올린 시도 횟수를 훑기가 주기마다 지워, 잡이 영원히 failed에
+  // 도달하지 못한다 - 애초에 고치려던 비용 누수가 그대로 재현된다. failed였던
+  // 잡이 되살아날 때만 0으로 되돌린다.
   sweep: async (limit = 500) => {
     const rows = await indexer.query(
       `INSERT INTO embedding_jobs (post_id, status)
@@ -76,10 +88,14 @@ const indexer = {
          AND (
            j.id IS NULL
            OR (j.status <> 'failed' AND (j.indexed_at IS NULL OR p.updated_at > j.indexed_at))
-           OR (j.status = 'failed' AND p.updated_at > j.failed_at)
+           OR (j.status = 'failed' AND p.updated_at > COALESCE(j.failed_at, j.updated_at))
          )
        LIMIT $2
-       ON CONFLICT (post_id) DO UPDATE SET status = 'pending', attempts = 0, failed_at = NULL, updated_at = now()
+       ON CONFLICT (post_id) DO UPDATE SET
+         status = 'pending',
+         attempts = CASE WHEN embedding_jobs.status = 'failed' THEN 0 ELSE embedding_jobs.attempts END,
+         failed_at = NULL,
+         updated_at = now()
        RETURNING post_id`,
       [INDEXED_BOARD_IDS, limit],
     )
@@ -142,6 +158,21 @@ const indexer = {
     const chunks = chunkText(source)
     const vectors = await embedding.embed(chunks, 'RETRIEVAL_DOCUMENT', 'embed_index')
 
+    // embedding.embed는 설계상 던지지 않고 실패한 자리에 null을 채운다 - 검색의
+    // 키워드 경로는 임베딩 없이도 동작해야 하기 때문이다. 하지만 여기서 그 null을
+    // 그대로 받아 done으로 찍으면, API 장애나 키 오류로 전부 실패했을 때도 성공한
+    // 것처럼 기록되어 훑기가 다시 집지 않고 그 글은 벡터 검색에서 영영 빠진다.
+    // 청크가 있는데 전부 null이면 던져서 drain의 재시도(그리고 결국 failed)로
+    // 넘긴다. 일부만 비면 나머지는 살아 있으니 done으로 두되 로그로 남긴다 -
+    // 청크 하나가 계속 실패한다고 글 전체의 검색 가능성을 막을 이유는 없다.
+    const nullCount = vectors.filter(v => !v).length
+    if (chunks.length > 0 && nullCount === chunks.length) {
+      throw new Error(`글 ${post.id}의 청크 ${chunks.length}개가 모두 임베딩되지 않았다`)
+    }
+    if (nullCount > 0) {
+      log.error(`indexer: 글 ${post.id}의 청크 ${nullCount}/${chunks.length}개가 임베딩되지 않았다`)
+    }
+
     await indexer.replaceChunks(post.id, post.board_id, chunks.map((content, i) => ({
       content,
       hash: computeHash(content),
@@ -175,10 +206,13 @@ const indexer = {
           const failed = attempts >= MAX_ATTEMPTS
           // 조용히 무한 재시도하면 API 비용만 태운다. failed로 확정되는 순간
           // failed_at을 찍어, 다음 훑기가 글이 실제로 바뀌기 전엔 되살리지 않게 한다.
+          // failed_at은 앱 서버의 시계가 아니라 DB의 now()로 찍는다 - 이 값은
+          // posts.updated_at(역시 DB에서 찍힌 값)과 비교되는데, 앱 호스트와 DB의
+          // 시계가 어긋나면 그 비교 기준 자체가 밀린다.
           await indexer.query(
             `UPDATE embedding_jobs SET attempts = $2, last_error = $3,
-             status = $4, failed_at = $5, updated_at = now() WHERE id = $1`,
-            [job.id, attempts, (e || {}).message || String(e), failed ? 'failed' : 'pending', failed ? new Date() : null],
+             status = $4, failed_at = CASE WHEN $4 = 'failed' THEN now() END, updated_at = now() WHERE id = $1`,
+            [job.id, attempts, (e || {}).message || String(e), failed ? 'failed' : 'pending'],
           )
           log.error(`indexer: 잡 ${job.id}(post ${job.post_id}) 실패`, e)
         }

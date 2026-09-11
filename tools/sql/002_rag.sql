@@ -46,6 +46,11 @@ CREATE TABLE IF NOT EXISTS embedding_jobs (
   failed_at    timestamptz
 );
 
+-- CREATE TABLE IF NOT EXISTS는 표가 이미 있으면 안의 컬럼 목록을 보지 않는다.
+-- 이전 태스크 때 이 파일을 이미 돌린 상자는 failed_at 없이 표만 남아 있으므로,
+-- 파일을 다시 돌려도 컬럼이 안 생겨 인덱서의 문장이 전부 실패한다. 따로 더한다.
+ALTER TABLE embedding_jobs ADD COLUMN IF NOT EXISTS failed_at timestamptz;
+
 CREATE UNIQUE INDEX IF NOT EXISTS embedding_jobs_post_unq ON embedding_jobs (post_id);
 CREATE INDEX IF NOT EXISTS embedding_jobs_status_idx ON embedding_jobs (status, created_at);
 
