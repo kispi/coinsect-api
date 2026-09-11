@@ -100,6 +100,16 @@ export class Post extends BaseModel {
       return Promise.reject({ message: 'TITLE_TOO_LONG' })
     }
 
+    // 본문 길이는 그대로 임베딩 비용이다. 글을 쓰거나 고치면 인덱서가 청킹해서
+    // 임베딩을 치므로, 상한이 없으면 익명 글 하나가 원하는 만큼 돈을 태울 수 있다.
+    // 값의 근거는 store.ts의 maxlength.postContent 주석에 있다.
+    //
+    // sanitize 전 원문을 잰다. 태그가 섞여 부풀려진 입력도 여기서 먼저 걸러야
+    // sanitize가 헛일을 하지 않는다.
+    if (post.content.length > store.state.globalVariables.maxlength.postContent) {
+      return Promise.reject({ message: 'CONTENT_TOO_LONG' })
+    }
+
     if (post.nickname.length > store.state.globalVariables.maxlength.nickname) {
       return Promise.reject({ message: 'NICKNAME_TOO_LONG' })
     }

@@ -11,6 +11,32 @@ import { rateLimit } from '../core/rate_limit'
 // 자유게시판 id
 const freeBoardId = 1
 
+// 글쓰기와 수정에 거는 속도 제한. 건 하나가 곧바로 인덱싱(청킹 + 임베딩)을 깨우므로
+// 이 경로는 인증 없이 비용을 만드는 자리다.
+//
+// search/with_llm과 같은 두 층이다. IP 층은 trustProxy 때문에 X-Forwarded-For로
+// 위조되니(2026-09-10 프로덕션 확인, services/content/desktop_jobs.ts) 실질 방어선은
+// 전역 바구니다.
+//
+// 쓰기와 수정이 한 바구니를 쓴다. 둘이 만드는 비용이 같은데 바구니를 나누면 같은
+// 사람이 두 배를 쓸 수 있다.
+//
+// 전역 분당 10회는 이 게시판의 실사용과 비교하면 한참 위다. 자유게시판에 지금까지
+// 쌓인 글이 모두 합쳐 1,630건인데, 분당 10건이면 하루 14,400건이다. 정상 사용자가
+// 닿을 수 없는 선이다. IP당 5회는 오타를 고치느라 연달아 저장하는 사람도 걸리지
+// 않을 만큼 두되(12초에 한 번), 자동화는 거른다.
+export const writeRateLimited = async (c: IContext) => {
+  if (!await rateLimit(`write:${c.req.ip}`, 5, 60)) return true
+
+  if (!await rateLimit('write:global', 10, 60)) {
+    // 여기 걸리면 헤더 위조로 IP 층을 우회한 폭주일 가능성이 높다. 사람이 알아채야 한다.
+    log.warn('post write: 전역 속도 제한 도달. IP 층 우회 가능성', { ip: c.req.ip })
+    return true
+  }
+
+  return false
+}
+
 const postController = {
   create: async (c: IContext) => {
     if (!c.req.ip) {
@@ -20,6 +46,10 @@ const postController = {
 
     const bannedUser = helpers.useBannedUser({ ip: c.req.ip })
     if (bannedUser) return c.res.failed({ message: 'BANNED_USER', extra: { bannedUser } })
+
+    // 막을 때는 다른 실패 경로와 같은 모양으로 돌려준다. 프론트가 아는 형태여야
+    // 사용자가 쓴 글을 잃지 않고 다시 시도할 수 있다.
+    if (await writeRateLimited(c)) return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
 
     const payload = c.req.body
     // if (!payload['board']) payload['board'] = { id : freeBoardId }
@@ -71,6 +101,8 @@ const postController = {
       c.res.failed()
       return
     }
+
+    if (await writeRateLimited(c)) return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
 
     const payload = c.req.body
 
