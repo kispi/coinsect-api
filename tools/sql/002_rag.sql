@@ -71,3 +71,11 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 -- 갈라내지 못한다. pg_trgm은 부분문자열 기반이라 어간이 남아 있으면 걸린다.
 CREATE INDEX IF NOT EXISTS posts_title_trgm_idx ON posts USING gin (title gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS posts_content_trgm_idx ON posts USING gin (content gin_trgm_ops);
+
+-- 001_ai_usage.sql과 같은 이유다. 이 파일은 확장 때문에 postgres로 도는데, 표 소유자가
+-- postgres로 남으면 앱이 읽지도 쓰지도 못한다. 앱 DB 사용자가 다르면 이름을 바꿀 것.
+ALTER TABLE post_chunks OWNER TO coinsect;
+ALTER TABLE embedding_jobs OWNER TO coinsect;
+ALTER TABLE embedding_cache OWNER TO coinsect;
+ALTER SEQUENCE post_chunks_id_seq OWNER TO coinsect;
+ALTER SEQUENCE embedding_jobs_id_seq OWNER TO coinsect;
