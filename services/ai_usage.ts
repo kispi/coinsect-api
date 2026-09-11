@@ -73,6 +73,10 @@ const aiUsage = {
       .addSelect('sum(u.thinking_tokens)', 'tokensThinking')
       .addSelect('sum(u.cost_micros)', 'costMicros')
       .where(`u.created_at >= :day::date AND u.created_at < (:day::date + interval '1 day')`, { day })
+      // createQueryBuilder는 리포지터리 find와 달리 소프트 삭제를 자동으로 거르지 않는다.
+      // 지금은 AiUsage를 소프트 삭제하는 경로가 없지만, 생기는 순간 지운 행이 집계에
+      // 섞여 들어가면 안 되므로 미리 막아 둔다.
+      .andWhere('u.deleted_at IS NULL')
       .groupBy('u.model')
       .addGroupBy('u.task')
       .getRawMany()
