@@ -154,7 +154,9 @@ The result JSON should be a form of { "kr": String, "en": String }
     if (q.length > 200) return Promise.reject({ message: 'q is too long', status: 400 })
 
     const boardId = c.req.query['boardId'] ? Number(c.req.query['boardId']) : null
-    const limit = Math.min(Number(c.req.query['limit']) || 20, 20)
+    // 정수로 내리고 1~20 사이로 묶는다. Number(...)만으로는 음수나 소수가 그대로
+    // SQL의 LIMIT까지 흘러가 500을 낸다.
+    const limit = Math.min(Math.max(Math.floor(Number(c.req.query['limit'])) || 20, 1), 20)
 
     const retrieved = await ragSearch.retrieve({ q, boardId, limit })
     if (!retrieved.length) return { data: [], total: 0 }
@@ -169,11 +171,17 @@ The result JSON should be a form of { "kr": String, "en": String }
     posts.forEach((post: Post) => post.mutatePostToBeSecure(c.req.ip))
 
     // 회수 순서가 곧 랭킹이다. DB가 돌려준 순서가 아니라 이 순서를 지켜야 한다.
+    //
+    // { ...post, ... }로 펼치면 안 된다. Post 인스턴스를 펼치면 프로토타입이
+    // 떨어져 나간 평범한 객체가 되고, 그러면 Post.toJSON()이 다시는 불리지
+    // 않는다 - password는 mutatePostToBeSecure가 아니라 toJSON()이 지우므로,
+    // 그 결과 익명 글의 비밀번호 해시가 그대로 응답에 실려 나간다. 반드시
+    // post.toJSON()을 먼저 불러 password가 지워진 평범한 객체를 만든 뒤에 펼친다.
     const byId = new Map(posts.map(p => [p.id, p]))
     const data = retrieved
       .map(hit => {
         const post = byId.get(hit.postId)
-        return post && { ...post, score: hit.score, matchType: hit.matchType }
+        return post && { ...post.toJSON(), score: hit.score, matchType: hit.matchType }
       })
       .filter(Boolean)
 

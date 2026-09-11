@@ -15,7 +15,10 @@ const localHash = (key: string): { [field: string]: unknown } => {
 const localCacheClient: ICacheClient = {
   set: (key: string, value: unknown, seconds?: number) => {
     localState[key] = value
-    if (seconds) setTimeout(() => localCacheClient.del(key), seconds * 1000)
+    // unref: 이 타이머는 만료 청소일 뿐이고 USE_REDIS가 꺼졌을 때(로컬/테스트)만 돈다.
+    // 실제 서버는 Fastify 소켓이 이벤트 루프를 붙잡고 있으니 상관없지만, unref가
+    // 없으면 이 타이머 하나 때문에 `node --test`가 만료 시각까지 종료를 미룬다.
+    if (seconds) setTimeout(() => localCacheClient.del(key), seconds * 1000).unref()
   },
   get: (key: string) => localState[key],
   del: (key: string) => delete localState[key],

@@ -197,7 +197,26 @@ const postController = {
   },
   search: async (c: IContext) => {
     // 인증이 없는 공개 경로다. 질의 임베딩이 IP당 비용을 만든다.
+    //
+    // IP 기준 제한은 실수로 두드리는 경우를 거르는 보조 층일 뿐, 악의적인 우회의
+    // 방어선이 아니다. 이 서버는 trustProxy가 켜져 있어 c.req.ip가 클라이언트가
+    // 보낸 X-Forwarded-For를 그대로 받는다 - 헤더 한 줄만 바꾸면 IP가 매번 달라져
+    // 한도가 통째로 무의미해진다. services/content/desktop_jobs.ts가 2026-09-10에
+    // 프로덕션에서 같은 문제를 겪고 자원 기준 제한으로 바꾼 사례가 있다.
+    //
+    // 그래서 아래에 IP와 무관한 전역 한도를 하나 더 둔다. 헤더를 아무리 바꿔도
+    // 전역 바구니는 하나뿐이라 피할 수 없고, 이것이 실질적인 비용 방어선이다.
+    if (!c.req.ip) return c.res.failed()
+
     if (!await rateLimit(`search:${c.req.ip}`, 30, 60)) {
+      return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
+    }
+
+    // 분당 120회. 채팅 기준 이 서비스의 실사용 트래픽(최근 30일 302건 수준)에서
+    // 정상 사용자가 닿을 값이 아니다. 여기 걸리면 헤더 위조로 IP 층을 우회한
+    // 폭주일 가능성이 높으므로 사람이 알아채도록 로그를 남긴다.
+    if (!await rateLimit('search:global', 120, 60)) {
+      log.warn('search: 전역 속도 제한 도달. IP 층 우회 가능성', { ip: c.req.ip })
       return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
     }
 
