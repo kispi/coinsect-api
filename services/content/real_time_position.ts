@@ -208,11 +208,6 @@ const realTimePositionService = {
       (o.size && isNaN(p(String(o.size))))
     ) throw { message: '진입가, 청산가, 규모는 숫자여야 합니다.' }
 
-    if (o.liqPrice && o.entryPrice && o.size) {
-      if (p(String(o.liqPrice)) > p(String(o.entryPrice)) && o.size > 0) throw { message: '롱포지션의 청산가가 진입가보다 높을 수는 없습니다' }
-      if (p(String(o.liqPrice)) < p(String(o.entryPrice)) && o.size < 0) throw { message: '숏포지션의 청산가가 진입가보다 낮을 수는 없습니다' }
-    }
-
     if (o.contract && !o.contract.endsWith('USDT')) throw { message: '계약은 반드시 USDT로 끝나야 합니다' }
   },
   validate: async o => {
