@@ -78,7 +78,14 @@ export class Post extends BaseModel {
 
     this.views += 1
     try {
-      await dataSource.getRepository(Post).update({ sharingKey: this.sharingKey }, { views: this.views })
+      // repository.update()도, 쿼리빌더의 update()도 @UpdateDateColumn을 자동으로
+      // 건드린다. 조회는 글을 고치는 게 아니므로 updated_at이 움직이면 그 자체로
+      // 뜻이 틀리고, RAG 인덱서가 "글이 실제로 바뀌었는가"를 오직 이 컬럼으로만
+      // 판단한다(services/rag/indexer.ts의 sweep/훑기). 조회수만 raw SQL로 올려
+      // updated_at을 그대로 둔다 - 안 그러면 조회수가 계속 오르는 인기 글은
+      // 내용이 그대로인데도 훑기가 매 주기 다시 잡고, 청크 하나가 영구히 실패하는
+      // 글은 failed로 접혔다가도 조회 한 번에 되살아나 영원히 재시도를 돈다.
+      await dataSource.query('UPDATE posts SET views = $1 WHERE sharing_key = $2', [this.views, this.sharingKey])
     } catch (e) {}
     return this
   }
