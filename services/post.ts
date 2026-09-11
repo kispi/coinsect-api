@@ -8,6 +8,16 @@ import { log } from '../core/logger'
 import store from '../store'
 import IContext from '../core/interfaces/context'
 import orm, { QueryOverrides } from '../core/orm'
+import aiUsage from './ai_usage'
+
+// 떠다니는 별칭(gemini-flash-latest)을 쓰지 않는다. 구글이 별칭을 다음 티어로
+// 옮기면 배포도 하지 않았는데 단가와 응답 성향이 함께 바뀌고, 단가표에 그 이름이
+// 없어 비용이 미상으로 기록된다. 판독 쪽이 같은 이유로 이미 고정돼 있다.
+//
+// 이 모델은 2027-01-01에 $1.50 / $7.50으로 두 배가 된다. 그날이 오면
+// model_usage.ts의 MODEL_PRICING을 함께 고쳐야 한다 - 표를 안 고치면 기록된
+// 원가만 절반으로 남고 청구서는 두 배로 온다.
+const ANSWER_MODEL = 'gemini-3.8-flash'
 
 const postService = {
   sitemap: async (c: IContext) => {
@@ -79,13 +89,35 @@ const postService = {
       data.forEach((post: Post) => post.mutatePostToBeSecure(c.req.ip))
 
       const genAI = new GoogleGenAI({ apiKey: store.state.serverConfig.GOOGLE_AI_STUDIO })
-      const generate = (parts: Array<{ text: string }>) => genAI.models.generateContent({
-        model: 'gemini-flash-latest',
-        contents: parts,
-        config: {
-          responseMimeType: 'application/json',
-        },
-      })
+      const generate = async (parts: Array<{ text: string }>) => {
+        const startedAt = Date.now()
+        try {
+          const result = await genAI.models.generateContent({
+            model: ANSWER_MODEL,
+            contents: parts,
+            config: { responseMimeType: 'application/json' },
+          })
+          void aiUsage.record({
+            task: 'post_answer',
+            model: ANSWER_MODEL,
+            usageMetadata: result.usageMetadata,
+            latencyMs: Date.now() - startedAt,
+            requester: c.req.ip,
+          })
+          return result
+        } catch (e) {
+          // 실패한 호출도 남긴다. 실패가 치솟는 것이 이상 징후인데 행이 없으면 안 보인다.
+          void aiUsage.record({
+            task: 'post_answer',
+            model: ANSWER_MODEL,
+            latencyMs: Date.now() - startedAt,
+            ok: false,
+            error: (e || {}).message || String(e),
+            requester: c.req.ip,
+          })
+          throw e
+        }
+      }
 
       const prompt1 = `
 User is asking a question: "${q}" about bitcoin.

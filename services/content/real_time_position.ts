@@ -22,6 +22,7 @@ import { IModelUsage, addUsage, emptyUsage, mergeUsage } from './model_usage'
 import awsService from '../aws'
 import { log } from '../../core/logger'
 import chatService from '../chat'
+import aiUsage from '../ai_usage'
 
 const now = () => helpers.dayjs().format()
 const newId = () => helpers.crypto.generateUUID(true)
@@ -354,6 +355,7 @@ const realTimePositionService = {
       },
     }]
 
+    const startedAt = Date.now()
     const result = await genAI.models.generateContent({
       // 2026-09-09에 gemini-3.5-flash-lite(월 $28 → $4)로 내리려다 접었다. 이 프롬프트로
       // 재보니 BTC 화면은 읽는데 알트코인 화면(SOXL 픽스처)은 9회 중 0회, 전부
@@ -371,6 +373,16 @@ const realTimePositionService = {
         thinkingConfig: { thinkingBudget: 0 },
       },
       contents,
+    })
+
+    // 계측. 프레임을 여러 장 보면 호출도 여러 번이므로 행도 여러 개 남는다.
+    // 기다리지 않는다 - 판독 응답이 계측 때문에 늦어지면 안 된다.
+    void aiUsage.record({
+      task: 'position_read',
+      model: POSITION_MODEL,
+      usageMetadata: result.usageMetadata,
+      latencyMs: Date.now() - startedAt,
+      requester: 'desktop',
     })
 
     const parsed = JSON.parse(result.text)
