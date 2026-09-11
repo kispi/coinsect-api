@@ -128,6 +128,25 @@ const aiUsage = {
       return 0
     }
   },
+
+  // 기간의 daily 행. 기본은 최근 30일이다.
+  daily: async (from?: string, to?: string) => {
+    const start = from || aiUsage.utcDay(-30)
+    const end = to || aiUsage.utcDay()
+
+    const data = await dataSource.getRepository(AiUsageDaily)
+      .createQueryBuilder('d')
+      .where('d.day >= :start AND d.day <= :end', { start, end })
+      .orderBy('d.day', 'DESC')
+      .addOrderBy('d.cost_micros', 'DESC')
+      .getMany()
+
+    return {
+      data,
+      total: data.length,
+      totalCostMicros: data.reduce((sum, o) => sum + Number(o.costMicros), 0),
+    }
+  },
 }
 
 export default aiUsage

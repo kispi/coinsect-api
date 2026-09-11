@@ -21,6 +21,7 @@ import orm, { joinIfAbsent } from '../core/orm'
 import cron from '../core/cron'
 import helpers from '../core/helpers'
 import chatService from '../services/chat'
+import aiUsageService from '../services/ai_usage'
 
 const service = useService()
 
@@ -133,6 +134,15 @@ routesUser.all = async (c: IContext) => {
 const adminController = {
   cron: {
     all: (c: IContext) => c.res.success(cron.stats()),
+  },
+  aiUsage: {
+    all: async (c: IContext) => {
+      try {
+        c.res.asJSON(await aiUsageService.daily(c.req.query['from'], c.req.query['to']))
+      } catch (e) {
+        c.res.failed(e)
+      }
+    },
   },
   chat: routesChat,
   store: routesStore,
