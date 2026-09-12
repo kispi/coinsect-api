@@ -40,6 +40,31 @@ import { INDEXED_BOARD_IDS } from './indexer'
 // 이 코퍼스에서는 그 판단이 특히 값을 한다.
 export const MIN_SCORE = 0.70
 
+// 관련 글의 최소 유사도. MIN_SCORE를 그대로 쓰면 안 된다 - 저건 질의와 청크 사이의
+// 거리로 잰 값이고, 여기는 청크와 청크 사이다. 같은 공간이라도 분포가 통째로 다르다.
+//
+// 2026-09-12 프로덕션에서 실측했다(표본 60글, 같은 보드 안에서 자기 글 제외).
+//
+//   이웃 순위별 유사도    1위 중앙 0.841   10위 중앙 0.818   10위 최소 0.748
+//
+// 상위 10위가 0.023 폭 안에 뭉쳐 있다. 0.70으로는 아무것도 걸러지지 않고, 순위
+// 자체도 의미를 갖기 어렵다. 코퍼스가 통째로 암호화폐 이야기라서다.
+//
+// 그래서 "관련을 살리는 값"이 아니라 "관련이라고 부를 만한 것만 남기는 값"으로
+// 골랐다. 임계값별로 이웃을 하나라도 가진 글의 비율을 봤다.
+//
+//   0.85  60글 중 33글   걸린 이웃 평균 126개
+//   0.88  60글 중 24글   걸린 이웃 평균 39개   <- 채택
+//   0.90  60글 중 15글
+//
+// 이웃 평균 개수가 저렇게 큰 것은 같은 작성자가 같은 형식으로 매일 쓴 시장
+// 코멘터리들이 임베딩 공간에서 서로 거의 같은 글이기 때문이다. 그래서 컷오프만으로는
+// 부족하고 작성자당 한 건으로 묶는 단계가 함께 필요하다(related가 그 일을 한다).
+//
+// 절반 넘는 글이 관련 글을 아예 갖지 못한다. 그게 맞다 - 억지로 채우면 "날짜만 다른
+// 같은 글"을 관련 글이라고 내보이게 된다. 없으면 섹션을 숨기는 쪽이 옳다.
+export const RELATED_MIN_SCORE = 0.88
+
 export interface IRetrieved {
   postId: number
   boardId: number
@@ -53,6 +78,14 @@ interface IVectorHit {
   postId: number
   boardId: number
   content: string
+  score: number
+}
+
+interface IRelatedHit {
+  postId: number
+  boardId: number
+  // 작성자당 한 건으로 묶는 데 쓴다. 익명 글은 null이다.
+  userId: number | null
   score: number
 }
 
@@ -84,6 +117,113 @@ const search = {
       content: r.content,
       score: Math.max(0, 1 - Number(r.distance)),
     }))
+  },
+
+  // 그 글의 청크 벡터를 읽는다. SQL을 타는 지점.
+  //
+  // 첫 청크만 쓴다. 청크 전체의 평균을 내는 방법도 있지만, 평균 벡터는 색인된
+  // 어떤 청크와도 다른 지점이라 실측해 둔 컷오프가 그 자리에서는 의미를 잃는다.
+  // 첫 청크는 색인된 청크들과 같은 성격의 점이므로 잰 값을 그대로 쓸 수 있다.
+  sourceVector: async (postId: number): Promise<number[] | null> => {
+    const rows = await dataSource.query(
+      `SELECT c.embedding::text AS embedding
+       FROM post_chunks c
+       WHERE c.post_id = $1 AND c.embedding IS NOT NULL
+       ORDER BY c.chunk_index
+       LIMIT 1`,
+      [postId],
+    )
+
+    if (!rows.length) return null
+
+    // pgvector의 텍스트 표현이 '[0.1,0.2,...]'라 그대로 JSON이다.
+    try {
+      return JSON.parse(rows[0].embedding)
+    } catch (e) {
+      log.error('관련 글: 청크 벡터를 읽지 못했다', e)
+      return null
+    }
+  },
+
+  // SQL을 타는 지점. vectorSearch와 나눠 둔 이유는 두 가지다 - 자기 글을 빼야 하고,
+  // 작성자당 한 건으로 묶기 위해 user_id가 필요하다.
+  relatedSearch: async (
+    vector: number[],
+    boardId: number,
+    excludePostId: number,
+    minScore: number,
+    limit: number,
+  ): Promise<IRelatedHit[]> => {
+    const rows = await dataSource.query(
+      `SELECT c.post_id, c.board_id, p.user_id, (c.embedding <=> $1::vector) AS distance
+       FROM post_chunks c
+       -- 살아 있는 글만. vectorSearch의 EXISTS와 같은 이유이고, 여기서는 작성자도
+       -- 함께 필요하므로 JOIN으로 겸한다.
+       JOIN posts p ON p.id = c.post_id AND p.deleted_at IS NULL
+       WHERE c.embedding IS NOT NULL
+         AND c.post_id <> $2
+         -- 보드를 넘지 않는다. web과 nuxt가 서로 다른 보드를 읽는 별개의 사이트라,
+         -- 넘어가면 한쪽 사이트의 글이 다른 쪽 화면에 관련 글로 올라간다.
+         AND c.board_id = $3
+         AND (c.embedding <=> $1::vector) <= $4
+       ORDER BY (c.embedding <=> $1::vector) ASC
+       LIMIT $5`,
+      [`[${vector.join(',')}]`, excludePostId, boardId, 1 - minScore, limit],
+    )
+
+    return rows.map(r => ({
+      postId: Number(r.post_id),
+      boardId: Number(r.board_id),
+      userId: r.user_id === null ? null : Number(r.user_id),
+      score: Math.max(0, 1 - Number(r.distance)),
+    }))
+  },
+
+  // 관련 글. 질의 임베딩을 만들지 않는다 - 그 글의 청크 벡터가 이미 저장돼 있으므로
+  // 그것으로 최근접 이웃만 찾으면 된다. 이 경로의 AI 비용은 0이다.
+  related: async ({ postId, boardId, limit = 5, minScore = RELATED_MIN_SCORE }: {
+    postId: number,
+    boardId: number,
+    limit?: number,
+    minScore?: number,
+  }): Promise<IRelatedHit[]> => {
+    const vector = await search.sourceVector(postId)
+    // 아직 색인되지 않았거나 색인 대상 보드가 아닌 글이다. 관련 글이 없는 것과
+    // 같게 다룬다 - 화면은 어느 쪽이든 섹션을 숨긴다.
+    if (!vector || !vector.length) return []
+
+    // 한 글이 청크 여러 개로 색인되고 작성자당 한 건으로 묶으므로, limit만큼만
+    // 뽑으면 접은 뒤에 남는 것이 거의 없다. 넉넉히 뽑아 놓고 자른다.
+    const depth = Math.max(limit * 10, 50)
+    const hits = await search.relatedSearch(vector, boardId, postId, minScore, depth)
+
+    // 글 단위로 접고, 이어서 작성자 단위로 접는다. 순서가 중요하다 - 같은 글의
+    // 청크 둘이 작성자 슬롯을 먼저 먹으면 그 작성자의 다른 글이 통째로 밀린다.
+    //
+    // 작성자로 접는 이유는 실측이다. 컷오프를 넘는 이웃이 글 하나당 수십 개씩
+    // 나오는데 대부분이 같은 사람이 같은 형식으로 매일 쓴 글이다. 접지 않으면
+    // 관련 글이 '날짜만 다른 같은 글' 목록이 된다.
+    //
+    // 익명 글(userId가 null)은 묶지 않는다. 서로 다른 사람일 수 있고, 하나로
+    // 묶으면 익명 글은 관련 글에 영원히 한 건만 오른다.
+    const seenPosts = new Set<number>()
+    const seenUsers = new Set<number>()
+    const picked: IRelatedHit[] = []
+
+    for (const hit of hits) {
+      if (picked.length >= limit) break
+      if (seenPosts.has(hit.postId)) continue
+      seenPosts.add(hit.postId)
+
+      if (hit.userId !== null) {
+        if (seenUsers.has(hit.userId)) continue
+        seenUsers.add(hit.userId)
+      }
+
+      picked.push(hit)
+    }
+
+    return picked
   },
 
   retrieve: async ({ q, boardId, limit = 20, minScore = MIN_SCORE }: {

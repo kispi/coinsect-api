@@ -295,6 +295,20 @@ const postController = {
       c.res.failed(e)
     }
   },
+  related: async (c: IContext) => {
+    // 임베딩을 만들지 않으므로 AI 비용은 없다. 그래도 한 번에 벡터 검색이 돌므로
+    // search보다 느슨하게만 잡아 둔다. 글을 열면 자동으로 불리는 경로라, 한도가
+    // 좁으면 평범하게 글 몇 개를 넘겨 읽는 사용자가 걸린다.
+    if (!await rateLimit(`related:${c.req.ip}`, 60, 60)) {
+      return c.res.failed({ message: 'TOO_MANY_REQUESTS' }, 429)
+    }
+
+    try {
+      c.res.asJSON(await postService.related(c))
+    } catch (e) {
+      c.res.failed(e)
+    }
+  },
   checkPassword: async (c: IContext) => {
     if (!c.req.body['password']) return c.res.failed({ message: 'MISSING_REQUIRED_FIELD_PASSWORD' })
 

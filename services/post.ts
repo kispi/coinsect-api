@@ -230,6 +230,46 @@ const postService = {
       return Promise.reject(e)
     }
   },
+  // 관련 글. 이 경로는 임베딩을 만들지 않는다 - 그 글의 청크 벡터가 이미 저장돼
+  // 있으므로 그것으로 최근접 이웃만 찾는다. AI 비용이 0이라 search()처럼 비용을
+  // 막을 이유는 없고, 벡터 검색 자체의 부하만 막으면 된다.
+  related: async (c: IContext) => {
+    const limit = Math.min(Math.max(Math.floor(Number(c.req.query['limit'])) || 5, 1), 10)
+
+    // 사라진 글의 관련 글을 돌려주면 안 된다. detail과 같은 조건으로 원본을 먼저 찾는다.
+    const source = await c.orm.getRepository(Post).createQueryBuilder('Post')
+      .select(['Post.id', 'Post.boardId'])
+      .where('Post.sharing_key = :sharingKey', { sharingKey: c.req.params['sharingKey'] })
+      .andWhere('Post.deleted_at IS NULL')
+      .getOne()
+
+    if (!source) return Promise.reject({ message: 'NOT_FOUND', status: 404 })
+
+    const retrieved = await ragSearch.related({ postId: source.id, boardId: source.boardId, limit })
+    if (!retrieved.length) return { data: [], total: 0 }
+
+    const posts = await c.orm.getRepository(Post).createQueryBuilder('Post')
+      .leftJoinAndSelect('Post.user', 'user')
+      .leftJoinAndSelect('user.profile', 'profile')
+      .leftJoinAndSelect('Post.board', 'board')
+      .where('Post.id IN (:...ids)', { ids: retrieved.map(o => o.postId) })
+      .getMany()
+
+    posts.forEach((post: Post) => post.mutatePostToBeSecure(c.req.ip))
+
+    // search()와 같은 함정이다. { ...post }로 펼치면 프로토타입이 떨어져 나가 Post.toJSON()이
+    // 다시는 불리지 않고, password는 mutatePostToBeSecure가 아니라 toJSON()이 지우므로
+    // 익명 글의 비밀번호 해시가 그대로 응답에 실려 나간다. toJSON()을 먼저 부른다.
+    const byId = new Map(posts.map(p => [p.id, p]))
+    const data = retrieved
+      .map(hit => {
+        const post = byId.get(hit.postId)
+        return post && { ...post.toJSON(), score: hit.score }
+      })
+      .filter(Boolean)
+
+    return { data, total: data.length }
+  },
   // 하이브리드 검색. 기존 /posts?keyword= 는 손대지 않는다 - 어드민과 목록이
   // 같이 쓰고 limit/offset 페이지네이션을 전제로 돌기 때문이다.
   search: async (c: IContext) => {
