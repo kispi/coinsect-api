@@ -144,7 +144,7 @@ test('자기 글은 애초에 조회에서 빠진다', async () => {
 
 test('접힌 뒤에도 limit을 채울 수 있도록 넉넉히 뽑는다', async () => {
   // 글 단위와 작성자 단위로 두 번 접으므로, limit만큼만 뽑으면 접은 뒤에 남는 것이
-  // 거의 없다. 이 여유가 사라지면 관련 글이 비는 것으로 조용히 퇴화한다.
+  // 거의 없다. 한 작성자가 이웃 수십 개를 연달아 차지하는 것이 실제 데이터의 모습이다.
   const depths: number[] = []
   const originals = { src: search.sourceVector, rel: search.relatedSearch }
   search.sourceVector = (async () => [0.1]) as never
@@ -167,5 +167,7 @@ test('접힌 뒤에도 limit을 채울 수 있도록 넉넉히 뽑는다', async
   }
 
   assert.equal(depths.length, 1)
-  assert.ok(depths[0] >= 50, `요청한 5건보다 훨씬 깊게 뽑아야 한다. 실제: ${depths[0]}`)
+  // 실측: 상위 50행에는 작성자가 3명뿐이고 300행까지 가야 11명이 나온다. 이 값이
+  // 작아지면 다섯 건을 청했는데 세 건이 돌아오는 상태로 조용히 돌아간다.
+  assert.ok(depths[0] >= 300, `요청한 5건보다 훨씬 깊게 뽑아야 한다. 실제: ${depths[0]}`)
 })
