@@ -162,6 +162,25 @@ const aiUsage = {
       totalCostMicros: data.reduce((sum, o) => sum + Number(o.costMicros), 0),
     }
   },
+
+  // 오늘치. daily()가 아니라 원본을 그 자리에서 접는다.
+  //
+  // ai_usage_daily에는 오늘 행이 없다 - rollup()은 "어제치"만 채우므로 오늘 쓴 금액은
+  // 내일이 되어야 그 표에 나타난다. 비용을 보러 들어온 화면이 정작 오늘을 못 보여주면
+  // 쓸모가 없으니, 오늘만 원본을 직접 집계한다. 90일 보존 창 안의 하루치라 행 수가
+  // 제한적이고 (task, created_at) 인덱스를 탄다.
+  //
+  // 반환 모양을 daily()와 같게 맞춘다. 화면이 두 벌의 렌더링 코드를 들지 않게 하려는
+  // 것이고, aggregate()가 이미 day를 각 행에 박아 주므로 그대로 겹친다.
+  today: async () => {
+    const data = await aiUsage.aggregate(aiUsage.utcDay())
+
+    return {
+      data,
+      total: data.length,
+      totalCostMicros: data.reduce((sum, o) => sum + Number(o.costMicros), 0),
+    }
+  },
 }
 
 export default aiUsage

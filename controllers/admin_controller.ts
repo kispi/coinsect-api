@@ -160,6 +160,15 @@ const adminController = {
         c.res.failed(e)
       }
     },
+    // 오늘치는 all()과 나눠 둔다. all()은 접힌 표를 읽고 이쪽은 원본을 집계하므로
+    // 비용이 다르다. 한 응답에 묶으면 과거 30일을 보려고 열 때마다 원본 집계가 따라온다.
+    today: async (c: IContext) => {
+      try {
+        c.res.asJSON(await aiUsageService.today())
+      } catch (e) {
+        c.res.failed(e)
+      }
+    },
   },
   chat: routesChat,
   store: routesStore,

@@ -131,3 +131,49 @@ test('utcDay는 서버 로케일과 무관하게 UTC 날짜를 준다', () => {
   const yesterday = new Date(aiUsage.utcDay(-1))
   assert.equal((today.getTime() - yesterday.getTime()) / (1000 * 60 * 60 * 24), 1)
 })
+
+test('today는 오늘 날짜로 원본을 집계하고 daily와 같은 모양으로 돌려준다', async () => {
+  // 이 메서드가 있는 이유는 ai_usage_daily에 오늘 행이 없다는 것이다 - rollup()이
+  // 어제치만 접기 때문이다. 그래서 today()가 daily 표를 읽으면 안 되고, 반드시
+  // 원본 집계(aggregate)를 오늘 날짜로 불러야 한다.
+  const askedDays = []
+  const originalAgg = aiUsage.aggregate
+  aiUsage.aggregate = (async (day: string) => {
+    askedDays.push(day)
+    return [
+      { day, model: 'gemini-3.8-flash', task: 'position_read', requests: 12, failures: 1, tokensIn: 100, tokensOut: 20, tokensThinking: 5, costMicros: 3000 },
+      { day, model: 'gemini-embedding-001', task: 'embed_index', requests: 40, failures: 0, tokensIn: 8000, tokensOut: 0, tokensThinking: 0, costMicros: 1200 },
+    ]
+  }) as never
+
+  let result
+  try {
+    result = await aiUsage.today()
+  } finally {
+    aiUsage.aggregate = originalAgg
+  }
+
+  assert.deepEqual(askedDays, [aiUsage.utcDay()], '어제가 아니라 오늘을 집계한다')
+  assert.equal(result.total, 2)
+  // 화면이 daily()와 today()에 같은 렌더링을 쓰므로 세 칸의 이름과 의미가 같아야 한다.
+  assert.equal(result.totalCostMicros, 4200)
+  assert.equal(result.data[0].day, aiUsage.utcDay())
+})
+
+test('today는 오늘 호출이 없으면 빈 결과와 0원을 돌려준다', async () => {
+  // 집계할 행이 없을 때 reduce의 초기값이 빠져 있으면 여기서 던진다. 화면은
+  // 비용 0을 보여줘야 하고, 예외로 빈 화면이 되면 안 된다.
+  const originalAgg = aiUsage.aggregate
+  aiUsage.aggregate = (async () => []) as never
+
+  let result
+  try {
+    result = await aiUsage.today()
+  } finally {
+    aiUsage.aggregate = originalAgg
+  }
+
+  assert.deepEqual(result.data, [])
+  assert.equal(result.total, 0)
+  assert.equal(result.totalCostMicros, 0)
+})
