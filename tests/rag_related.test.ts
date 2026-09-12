@@ -20,8 +20,8 @@ const withStubs = async (
   }
 }
 
-const hit = (postId: number, userId: number | null, score: number) =>
-  ({ postId, boardId: 1, userId, score })
+const hit = (postId: number, userId: number | null, score: number, nickname: string | null = null) =>
+  ({ postId, boardId: 1, userId, nickname, score })
 
 test('색인되지 않은 글은 관련 글이 없는 것과 같게 다룬다', async () => {
   // 아직 인덱싱 전이거나 색인 대상 보드가 아닌 글이다. 여기서 던지면 글 상세가
@@ -63,14 +63,50 @@ test('작성자당 한 건으로 묶을 때 더 유사한 글이 남는다', asy
   assert.equal(result[0].score, 0.95)
 })
 
-test('익명 글은 작성자로 묶지 않는다', async () => {
-  // userId가 null인 글을 하나로 묶으면 서로 다른 사람이 쓴 글이 한 건으로 접히고,
-  // 익명 글은 관련 글에 영원히 한 건만 오른다.
+test('userId가 없는 글은 nickname으로 묶는다', async () => {
+  // 이것이 실측에서 드러난 자리다. 관련 글 상위를 통째로 차지한 '[09/14] 비트코인 시황'
+  // 연작이 전부 userId 없는 크롤링 글이었다. userId로만 묶으면 그 글들이 서로 다른
+  // 작성자로 취급돼 장치가 정작 필요한 자리에서 아무 일도 하지 않는다.
+  const result = await withStubs({
+    hits: [
+      hit(61, null, 0.98, 'BTjino'),
+      hit(62, null, 0.97, 'BTjino'),
+      hit(63, null, 0.97, 'BTjino'),
+      hit(1342, 409, 0.94, '베스트코인'),
+    ],
+  }, () => search.related({ postId: 60, boardId: 1 })) as { postId: number }[]
+
+  assert.deepEqual(result.map(o => o.postId), [61, 1342])
+})
+
+test('userId와 nickname이 모두 없으면 접지 않고 통과시킨다', async () => {
+  // 묶을 근거가 없는 글이다. 여기서 하나로 접으면 서로 아무 관계 없는 글들이
+  // 한 건으로 사라진다.
   const result = await withStubs({
     hits: [hit(7, null, 0.95), hit(8, null, 0.94), hit(9, null, 0.93)],
   }, () => search.related({ postId: 1, boardId: 1 })) as { postId: number }[]
 
   assert.deepEqual(result.map(o => o.postId), [7, 8, 9])
+})
+
+test('같은 사람이 회원 글과 익명 글로 두 칸을 차지하지 않는다', async () => {
+  // 실측에서 '베스트코인'이 userId 있는 글과 없는 글로 각각 한 칸씩 올라왔다.
+  // userId를 우선해 하나만 쓰면 두 글의 키가 달라 접히지 않는다.
+  const result = await withStubs({
+    hits: [hit(7, 409, 0.95, '베스트코인'), hit(8, null, 0.94, '베스트코인')],
+  }, () => search.related({ postId: 1, boardId: 1 })) as { postId: number }[]
+
+  assert.deepEqual(result.map(o => o.postId), [7])
+})
+
+test('nickname이 같으면 서로 다른 userId여도 한 명으로 접는다', async () => {
+  // 접는 쪽을 고른 대가다. 익명 글의 닉은 사람이 직접 적는 값이라 겹칠 수 있다.
+  // 잃는 것은 목록의 한 칸이고, 막는 것은 같은 사람의 연작이 화면을 덮는 것이다.
+  const result = await withStubs({
+    hits: [hit(7, 10, 0.95, '같은닉'), hit(8, 11, 0.94, '같은닉')],
+  }, () => search.related({ postId: 1, boardId: 1 })) as { postId: number }[]
+
+  assert.deepEqual(result.map(o => o.postId), [7])
 })
 
 test('limit을 넘겨 채우지 않는다', async () => {

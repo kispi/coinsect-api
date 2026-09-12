@@ -84,9 +84,32 @@ interface IVectorHit {
 interface IRelatedHit {
   postId: number
   boardId: number
-  // 작성자당 한 건으로 묶는 데 쓴다. 익명 글은 null이다.
+  // 작성자당 한 건으로 묶는 데 쓴다. userId가 없는 글이 230건 있어서 nickname을 함께 든다.
   userId: number | null
+  nickname: string | null
   score: number
+}
+
+// 한 작성자를 가리키는 키들. 하나라도 이미 나왔으면 같은 사람으로 본다.
+//
+// userId만으로는 안 된다. 실측에서 관련 글 상위를 통째로 차지한 '[09/14] 비트코인 시황'
+// 연작이 전부 userId가 없는 글이었다 - 크롤링으로 들어온 글에는 앱 사용자가 없다.
+// userId로만 묶으면 그 글들은 서로 다른 작성자로 취급돼 묶이지 않고, 장치가 정작
+// 필요한 자리에서 아무 일도 하지 않는다.
+//
+// 둘 중 하나를 고르는 것으로도 부족하다. userId를 우선하면 같은 사람이 회원 글과
+// 익명 글로 각각 한 칸씩 차지한다(실측: '베스트코인'이 userId 있는 글과 없는 글로
+// 두 번 올라왔다). 그래서 가진 키를 모두 등록하고, 하나라도 겹치면 접는다.
+//
+// 대가는 서로 다른 사람이 같은 닉을 쓸 때 한 명으로 접히는 것이다. nickname은 익명
+// 글에서 사람이 직접 적는 값이라 그런 일이 생길 수 있다. 잃는 것은 관련 글 목록의
+// 한 칸이고, 얻는 것은 '날짜만 다른 같은 글' 열세 줄을 막는 것이다.
+const authorKeysOf = (hit: IRelatedHit): string[] => {
+  const keys: string[] = []
+  if (hit.userId !== null) keys.push(`u:${hit.userId}`)
+  if (hit.nickname) keys.push(`n:${hit.nickname}`)
+  // 둘 다 없으면 묶을 근거가 없다. 접지 않고 통과시킨다.
+  return keys
 }
 
 const search = {
@@ -155,7 +178,7 @@ const search = {
     limit: number,
   ): Promise<IRelatedHit[]> => {
     const rows = await dataSource.query(
-      `SELECT c.post_id, c.board_id, p.user_id, (c.embedding <=> $1::vector) AS distance
+      `SELECT c.post_id, c.board_id, p.user_id, p.nickname, (c.embedding <=> $1::vector) AS distance
        FROM post_chunks c
        -- 살아 있는 글만. vectorSearch의 EXISTS와 같은 이유이고, 여기서는 작성자도
        -- 함께 필요하므로 JOIN으로 겸한다.
@@ -175,6 +198,7 @@ const search = {
       postId: Number(r.post_id),
       boardId: Number(r.board_id),
       userId: r.user_id === null ? null : Number(r.user_id),
+      nickname: r.nickname ?? null,
       score: Math.max(0, 1 - Number(r.distance)),
     }))
   },
@@ -200,14 +224,11 @@ const search = {
     // 글 단위로 접고, 이어서 작성자 단위로 접는다. 순서가 중요하다 - 같은 글의
     // 청크 둘이 작성자 슬롯을 먼저 먹으면 그 작성자의 다른 글이 통째로 밀린다.
     //
-    // 작성자로 접는 이유는 실측이다. 컷오프를 넘는 이웃이 글 하나당 수십 개씩
-    // 나오는데 대부분이 같은 사람이 같은 형식으로 매일 쓴 글이다. 접지 않으면
-    // 관련 글이 '날짜만 다른 같은 글' 목록이 된다.
-    //
-    // 익명 글(userId가 null)은 묶지 않는다. 서로 다른 사람일 수 있고, 하나로
-    // 묶으면 익명 글은 관련 글에 영원히 한 건만 오른다.
+    // 작성자로 접는 이유는 실측이다. 프로덕션에서 한 글의 이웃을 뽑아 보니 상위
+    // 열세 줄이 같은 사람이 쓴 '[09/14] 비트코인 시황', '[09/16] 비트코인 시황'
+    // 연작이었다. 접지 않으면 관련 글이 '날짜만 다른 같은 글' 목록이 된다.
     const seenPosts = new Set<number>()
-    const seenUsers = new Set<number>()
+    const seenAuthors = new Set<string>()
     const picked: IRelatedHit[] = []
 
     for (const hit of hits) {
@@ -215,10 +236,9 @@ const search = {
       if (seenPosts.has(hit.postId)) continue
       seenPosts.add(hit.postId)
 
-      if (hit.userId !== null) {
-        if (seenUsers.has(hit.userId)) continue
-        seenUsers.add(hit.userId)
-      }
+      const authorKeys = authorKeysOf(hit)
+      if (authorKeys.some(key => seenAuthors.has(key))) continue
+      authorKeys.forEach(key => seenAuthors.add(key))
 
       picked.push(hit)
     }
